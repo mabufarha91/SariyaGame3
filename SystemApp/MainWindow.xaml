@@ -1,0 +1,75 @@
+<Window x:Class="KinectCalibrationWPF.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Kinect Calibration System" Height="600" Width="800"
+        WindowStartupLocation="CenterScreen"
+        Background="#F5F5F5">
+    
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header -->
+        <Border Grid.Row="0" Background="#2196F3" Padding="20">
+            <StackPanel>
+                <TextBlock Text="Kinect Wall Calibration System" 
+                           FontSize="28" FontWeight="Bold" 
+                           Foreground="White" HorizontalAlignment="Center"/>
+                <TextBlock Text="Professional calibration and touch detection for Kinect v2" 
+                           FontSize="14" Foreground="#E3F2FD" 
+                           HorizontalAlignment="Center" Margin="0,5,0,0"/>
+            </StackPanel>
+        </Border>
+        
+        <!-- Main Content -->
+        <Grid Grid.Row="1" Margin="40">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            
+            <!-- Status Display -->
+            <Border Grid.Row="0" Background="White" CornerRadius="8" 
+                    Padding="20" Margin="0,0,0,20">
+                <StackPanel>
+                    <TextBlock Text="System Status" FontSize="18" FontWeight="Bold" 
+                               Foreground="#424242" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="KinectStatusText" Text="Checking Kinect connection..." 
+                               FontSize="14" HorizontalAlignment="Center" Foreground="#FF9800"/>
+                </StackPanel>
+            </Border>
+            
+            <!-- Main Menu -->
+            <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <Button x:Name="StartCalibrationButton" Content="Start Calibration Wizard" 
+                        FontSize="16" Padding="30,15" Background="#2196F3" Foreground="White"
+                        Click="StartCalibrationButton_Click"/>
+                
+                <Button x:Name="TouchTestButton" Content="Touch Detection Test" 
+                        Margin="0,20,0,0" Background="#2196F3" Foreground="White"
+                        Click="TouchTestButton_Click"/>
+                
+                <Button x:Name="SettingsButton" Content="Settings" 
+                        Margin="0,20,0,0" Background="#2196F3" Foreground="White"
+                        Click="SettingsButton_Click"/>
+            </StackPanel>
+            
+            <!-- Instructions -->
+            <Border Grid.Row="2" Background="White" CornerRadius="8" 
+                    Padding="20" Margin="0,20,0,0">
+                <TextBlock Text="Press F1 to start calibration, F2 for touch test, or use the buttons above." 
+                           FontSize="14" HorizontalAlignment="Center" Foreground="#666666"/>
+            </Border>
+        </Grid>
+        
+        <!-- Footer -->
+        <Border Grid.Row="2" Background="#424242" Padding="10">
+            <TextBlock Text="Kinect Calibration System v1.0 - WPF Edition" 
+                       Foreground="White" HorizontalAlignment="Center" FontSize="12"/>
+        </Border>
+    </Grid>
+</Window>

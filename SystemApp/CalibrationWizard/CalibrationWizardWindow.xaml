@@ -1,0 +1,125 @@
+<Window x:Class="KinectCalibrationWPF.CalibrationWizard.CalibrationWizardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:KinectCalibrationWPF.UI"
+        Title="Calibration Wizard - Screen 1: Define Surface Plane" 
+        Height="700" Width="1000"
+        WindowStartupLocation="CenterScreen"
+        Background="#F5F5F5">
+    
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header -->
+        <Border Grid.Row="0" Background="#2196F3" Padding="20">
+            <StackPanel>
+                <TextBlock Text="Calibration Wizard - Screen 1" 
+                           FontSize="24" FontWeight="Bold" 
+                           Foreground="White" HorizontalAlignment="Center"/>
+                <TextBlock Text="Define Surface Plane: Click on two separate points on the interactive surface" 
+                           FontSize="14" Foreground="#E3F2FD" 
+                           HorizontalAlignment="Center" Margin="0,5,0,0"/>
+            </StackPanel>
+        </Border>
+        
+        <!-- Main Content -->
+        <Grid Grid.Row="1" Margin="20">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            
+			<!-- Camera Feed with Movable Points -->
+			<Border Grid.Column="0" Background="White" CornerRadius="8" 
+					Margin="0,0,10,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Camera Feed -->
+                    <Border Grid.Row="0" Background="#2C2C2C" Margin="10">
+                        <Grid>
+                            <Image x:Name="CameraFeedImage" Stretch="Uniform" />
+                            
+                            <!-- Movable Points Overlay -->
+                            <ui:MovablePointsCanvas x:Name="MovablePoints" Background="Transparent"/>
+                        </Grid>
+                    </Border>
+                    
+                    <!-- Camera Feed Status -->
+                    <Border Grid.Row="1" Background="#F0F0F0" Padding="10">
+                        <TextBlock x:Name="CameraStatusText" Text="Camera: Initializing..." 
+                                   HorizontalAlignment="Center" FontSize="12"/>
+                    </Border>
+                </Grid>
+            </Border>
+            
+			<!-- Control Panel -->
+			<Border Grid.Column="1" Background="White" CornerRadius="8" 
+					Margin="10,0,0,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="20">
+                        
+                        <!-- Instructions -->
+                        <TextBlock Text="Instructions" FontSize="18" FontWeight="Bold" 
+                                   Foreground="#424242" Margin="0,0,0,10"/>
+                        <TextBlock Text="1. Click anywhere on the camera feed to place points&#x0a;2. Drag points to adjust their positions&#x0a;3. You need exactly 2 points to define the surface plane&#x0a;4. Points will automatically recalculate the plane when moved" 
+                                   TextWrapping="Wrap" Margin="0,0,0,20" Foreground="#666666"/>
+                        
+                        <!-- Point Status -->
+                        <TextBlock Text="Point Status" FontSize="16" FontWeight="Bold" 
+                                   Foreground="#424242" Margin="0,0,0,10"/>
+                        <Border Background="#F8F9FA" Padding="15" CornerRadius="5" Margin="0,0,0,20">
+                            <StackPanel>
+                                <TextBlock x:Name="PointCountText" Text="Points: 0/2" 
+                                           FontSize="14" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="PointStatusText" Text="Click to place first point" 
+                                           FontSize="12" Foreground="#666666" Margin="0,5,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        
+                        <!-- Action Buttons -->
+                        <TextBlock Text="Actions" FontSize="16" FontWeight="Bold" 
+                                   Foreground="#424242" Margin="0,0,0,10"/>
+                        
+                        <Button x:Name="CalculatePlaneButton" Content="Calculate Plane" 
+                                Style="{StaticResource WizardButtonStyle}" Margin="0,0,0,10"
+                                Click="CalculatePlaneButton_Click" IsEnabled="False"/>
+                        
+                        <Button x:Name="ResetPointsButton" Content="Reset Points" 
+                                Style="{StaticResource WizardButtonStyle}" Margin="0,0,0,10"
+                                Click="ResetPointsButton_Click" IsEnabled="False"/>
+                        
+                        <Button x:Name="NextButton" Content="Next Screen" 
+                                Style="{StaticResource WizardButtonStyle}" Margin="0,20,0,10"
+                                Click="NextButton_Click" IsEnabled="False"/>
+                        
+                        <Button x:Name="CancelButton" Content="Cancel" 
+                                Style="{StaticResource WizardButtonStyle}" 
+                                Background="#F44336" Click="CancelButton_Click"/>
+                        
+                        <!-- Status Display -->
+                        <TextBlock Text="Status" FontSize="16" FontWeight="Bold" 
+                                   Foreground="#424242" Margin="0,20,0,10"/>
+                        <Border Background="#E8F5E8" Padding="15" CornerRadius="5">
+                            <TextBlock x:Name="StatusText" Text="Ready to start calibration" 
+                                       FontSize="12" Foreground="#2E7D32"/>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+        
+        <!-- Footer -->
+        <Border Grid.Row="2" Background="#424242" Padding="10">
+            <TextBlock Text="Screen 1 of 4: Define Surface Plane" 
+                       Foreground="White" HorizontalAlignment="Center" FontSize="12"/>
+        </Border>
+    </Grid>
+</Window>
