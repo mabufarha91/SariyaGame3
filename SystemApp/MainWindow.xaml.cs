@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Input;
+using KinectCalibrationWPF.Services;
+using KinectCalibrationWPF.Models;
 
 namespace KinectCalibrationWPF
 {
@@ -13,8 +15,40 @@ namespace KinectCalibrationWPF
         public MainWindow()
         {
             InitializeComponent();
-            InitializeKinect();
+            // Initialize Kinect asynchronously to keep UI responsive
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    var mgr = new KinectManager.KinectManager();
+                    // marshal to UI
+                    this.Dispatcher.Invoke(() =>
+                    {
+                        kinectManager = mgr;
+                        UpdateKinectStatus();
+                    });
+                }
+                catch (System.Exception ex)
+                {
+                    this.Dispatcher.Invoke(() =>
+                    {
+                        KinectStatusText.Text = "Kinect: Not Connected (Test Mode)";
+                        KinectStatusText.Foreground = System.Windows.Media.Brushes.Orange;
+                        System.Diagnostics.Debug.WriteLine(string.Format("Kinect init async failed: {0}", ex.Message));
+                    });
+                }
+            });
             SetupKeyboardShortcuts();
+            // Load calibration if exists
+            try
+            {
+                var cfg = CalibrationStorage.Load();
+                if (cfg != null)
+                {
+                    System.Diagnostics.Debug.WriteLine("Calibration loaded at startup.");
+                }
+            }
+            catch { }
         }
 
         protected override void OnClosed(System.EventArgs e)

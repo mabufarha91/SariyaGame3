@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Windows.Media.Imaging;
 using Microsoft.Kinect;
 
@@ -17,6 +18,14 @@ namespace KinectCalibrationWPF.KinectManager
         private int depthHeight;
         private int colorWidth;
         private int colorHeight;
+        private WriteableBitmap colorBitmap;
+        private byte[] latestColorData;
+        private readonly object colorDataLock = new object();
+        private DateTime lastColorFrameTimeUtc;
+        private DateTime lastDepthFrameTimeUtc;
+        private ColorSpacePoint[] depthToColorPoints;
+        private Body[] latestBodies;
+        private readonly object bodyDataLock = new object();
         
         public bool IsInitialized { get; private set; }
         public bool IsTestMode { get; private set; }
@@ -29,6 +38,10 @@ namespace KinectCalibrationWPF.KinectManager
         public event EventHandler<ColorFrameArrivedEventArgs> ColorFrameArrived;
         public event EventHandler<DepthFrameArrivedEventArgs> DepthFrameArrived;
         public event EventHandler<BodyFrameArrivedEventArgs> BodyFrameArrived;
+        
+        // Debug counters to verify frame events
+        public int colorFramesReceived = 0;
+        public int depthFramesReceived = 0;
         
         public KinectManager()
         {
@@ -60,14 +73,19 @@ namespace KinectCalibrationWPF.KinectManager
                 var colorDesc = kinectSensor.ColorFrameSource.CreateFrameDescription(ColorImageFormat.Bgra);
                 colorWidth = colorDesc.Width;
                 colorHeight = colorDesc.Height;
+                latestColorData = new byte[colorDesc.LengthInPixels * colorDesc.BytesPerPixel];
+                colorBitmap = null; // create on UI thread lazily in GetColorBitmap
                 var depthDesc = kinectSensor.DepthFrameSource.FrameDescription;
                 depthWidth = depthDesc.Width;
                 depthHeight = depthDesc.Height;
+                depthToColorPoints = new ColorSpacePoint[depthWidth * depthHeight];
+                latestBodies = new Body[kinectSensor.BodyFrameSource.BodyCount];
                 
                 // Subscribe to events
                 colorFrameReader.FrameArrived += ColorFrameReader_FrameArrived;
                 depthFrameReader.FrameArrived += DepthFrameReader_FrameArrived;
                 bodyFrameReader.FrameArrived += BodyFrameReader_FrameArrived;
+                kinectSensor.IsAvailableChanged += KinectSensor_IsAvailableChanged;
                 
                 // Start the sensor
                 kinectSensor.Open();
@@ -85,23 +103,61 @@ namespace KinectCalibrationWPF.KinectManager
         
         private void ColorFrameReader_FrameArrived(object sender, ColorFrameArrivedEventArgs e)
         {
+            if (kinectSensor == null || !kinectSensor.IsAvailable || colorFrameReader == null) return;
             if (ColorFrameArrived != null) { ColorFrameArrived(this, e); }
+            try
+            {
+                using (var colorFrame = e.FrameReference.AcquireFrame())
+                {
+                    if (colorFrame == null) return;
+                    Interlocked.Increment(ref colorFramesReceived);
+                    var colorFrameDescription = colorFrame.ColorFrameSource.CreateFrameDescription(ColorImageFormat.Bgra);
+                    if (latestColorData == null || latestColorData.Length != colorFrameDescription.LengthInPixels * colorFrameDescription.BytesPerPixel)
+                    {
+                        latestColorData = new byte[colorFrameDescription.LengthInPixels * colorFrameDescription.BytesPerPixel];
+                    }
+                    colorFrame.CopyConvertedFrameDataToArray(latestColorData, ColorImageFormat.Bgra);
+                    lock (colorDataLock)
+                    {
+                        lastColorFrameTimeUtc = DateTime.UtcNow;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(string.Format("Color frame update failed: {0}", ex.Message));
+            }
         }
         
         private void DepthFrameReader_FrameArrived(object sender, DepthFrameArrivedEventArgs e)
         {
+            if (kinectSensor == null || !kinectSensor.IsAvailable || depthFrameReader == null) return;
             if (DepthFrameArrived != null) { DepthFrameArrived(this, e); }
             try
             {
                 using (var depthFrame = e.FrameReference.AcquireFrame())
                 {
                     if (depthFrame == null) return;
+                    Interlocked.Increment(ref depthFramesReceived);
                     var frameDesc = depthFrame.DepthFrameSource.FrameDescription;
                     if (latestDepthData == null || latestDepthData.Length != frameDesc.LengthInPixels)
                     {
                         latestDepthData = new ushort[frameDesc.LengthInPixels];
                     }
                     depthFrame.CopyFrameDataToArray(latestDepthData);
+                    try
+                    {
+                        if (depthToColorPoints == null || depthToColorPoints.Length != frameDesc.LengthInPixels)
+                        {
+                            depthToColorPoints = new ColorSpacePoint[frameDesc.LengthInPixels];
+                        }
+                        coordinateMapper.MapDepthFrameToColorSpace(latestDepthData, depthToColorPoints);
+                    }
+                    catch (Exception mapEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine(string.Format("MapDepthFrameToColorSpace failed: {0}", mapEx.Message));
+                    }
+                    lastDepthFrameTimeUtc = DateTime.UtcNow;
                 }
             }
             catch (Exception ex)
@@ -109,40 +165,112 @@ namespace KinectCalibrationWPF.KinectManager
                 System.Diagnostics.Debug.WriteLine(string.Format("Depth frame copy failed: {0}", ex.Message));
             }
         }
+
+        private void KinectSensor_IsAvailableChanged(object sender, IsAvailableChangedEventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine(string.Format("Kinect availability changed: {0}", e.IsAvailable));
+            // Do not crash; UI will reflect frozen counters if unavailable
+        }
         
         private void BodyFrameReader_FrameArrived(object sender, BodyFrameArrivedEventArgs e)
         {
             if (BodyFrameArrived != null) { BodyFrameArrived(this, e); }
+            try
+            {
+                using (var bodyFrame = e.FrameReference.AcquireFrame())
+                {
+                    if (bodyFrame == null) return;
+                    var bodies = new Body[bodyFrame.BodyFrameSource.BodyCount];
+                    bodyFrame.GetAndRefreshBodyData(bodies);
+                    lock (bodyDataLock)
+                    {
+                        latestBodies = bodies;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(string.Format("Body frame update failed: {0}", ex.Message));
+            }
         }
         
         public BitmapSource GetColorBitmap()
         {
             if (!IsInitialized || kinectSensor == null)
                 return CreateTestColorBitmap();
-                
-            using (var colorFrame = colorFrameReader.AcquireLatestFrame())
+
+            // Create the bitmap lazily on the UI thread
+            if (colorBitmap == null && colorWidth > 0 && colorHeight > 0)
             {
-                if (colorFrame == null)
-                    return CreateTestColorBitmap();
-                    
-                var colorFrameDescription = colorFrame.ColorFrameSource.CreateFrameDescription(ColorImageFormat.Bgra);
-                var colorFrameData = new byte[colorFrameDescription.LengthInPixels * colorFrameDescription.BytesPerPixel];
-                
-                colorFrame.CopyConvertedFrameDataToArray(colorFrameData, ColorImageFormat.Bgra);
-                
-                var bitmap = new WriteableBitmap(
-                    colorFrameDescription.Width,
-                    colorFrameDescription.Height,
-                    96, 96, System.Windows.Media.PixelFormats.Bgra32, null);
-                    
-                bitmap.WritePixels(
-                    new System.Windows.Int32Rect(0, 0, colorFrameDescription.Width, colorFrameDescription.Height),
-                    colorFrameData,
-                    (int)(colorFrameDescription.Width * colorFrameDescription.BytesPerPixel),
-                    0);
-                    
-                return bitmap;
+                colorBitmap = new WriteableBitmap(colorWidth, colorHeight, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null);
             }
+
+            // Update pixels from latestColorData buffer
+            if (colorBitmap != null && latestColorData != null)
+            {
+                try
+                {
+                    colorBitmap.WritePixels(
+                        new System.Windows.Int32Rect(0, 0, colorWidth, colorHeight),
+                        latestColorData,
+                        colorWidth * 4,
+                        0);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(string.Format("Color bitmap WritePixels failed: {0}", ex.Message));
+                }
+            }
+
+            return colorBitmap;
+        }
+
+        public bool IsColorStreamActive()
+        {
+            return (DateTime.UtcNow - lastColorFrameTimeUtc).TotalSeconds < 1.0;
+        }
+
+        public bool IsDepthStreamActive()
+        {
+            return (DateTime.UtcNow - lastDepthFrameTimeUtc).TotalSeconds < 1.0;
+        }
+
+        public Body[] GetLatestBodiesSnapshot()
+        {
+            if (!IsInitialized) return null;
+            lock (bodyDataLock)
+            {
+                if (latestBodies == null) return null;
+                var clone = new Body[latestBodies.Length];
+                Array.Copy(latestBodies, clone, latestBodies.Length);
+                return clone;
+            }
+        }
+
+        public bool TryGetTrackedHand(out CameraSpacePoint handPoint, bool preferRightHand = true)
+        {
+            handPoint = new CameraSpacePoint { X = float.NaN, Y = float.NaN, Z = float.NaN };
+            var bodies = GetLatestBodiesSnapshot();
+            if (bodies == null) return false;
+            foreach (var body in bodies)
+            {
+                if (body == null || !body.IsTracked) continue;
+                JointType jt = preferRightHand ? JointType.HandRight : JointType.HandLeft;
+                var joint = body.Joints[jt];
+                if (joint.TrackingState == TrackingState.Tracked || joint.TrackingState == TrackingState.Inferred)
+                {
+                    handPoint = joint.Position;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public static double DistancePointToPlaneMeters(CameraSpacePoint p, double nx, double ny, double nz, double d)
+        {
+            // plane normalized? assume n is unit
+            double value = nx * p.X + ny * p.Y + nz * p.Z + d;
+            return Math.Abs(value); // meters when n is unit length
         }
         
         public BitmapSource GetDepthBitmap()
@@ -206,15 +334,18 @@ namespace KinectCalibrationWPF.KinectManager
                 return false;
 
             ushort[] depthDataSnapshot = null;
+            ColorSpacePoint[] depthToColorSnapshot = null;
             int localDepthWidth, localDepthHeight, localColorWidth, localColorHeight;
             lock (depthDataLock)
             {
-                if (latestDepthData == null)
+                if (latestDepthData == null || depthToColorPoints == null)
                 {
                     return false;
                 }
                 depthDataSnapshot = new ushort[latestDepthData.Length];
                 Array.Copy(latestDepthData, depthDataSnapshot, latestDepthData.Length);
+                depthToColorSnapshot = new ColorSpacePoint[depthToColorPoints.Length];
+                Array.Copy(depthToColorPoints, depthToColorSnapshot, depthToColorPoints.Length);
                 localDepthWidth = depthWidth;
                 localDepthHeight = depthHeight;
                 localColorWidth = colorWidth > 0 ? colorWidth : 1920;
@@ -226,29 +357,51 @@ namespace KinectCalibrationWPF.KinectManager
 
             try
             {
-                var depthSpacePoints = new DepthSpacePoint[localColorWidth * localColorHeight];
-                coordinateMapper.MapColorFrameToDepthSpace(depthDataSnapshot, depthSpacePoints);
-
-                int idx = colorY * localColorWidth + colorX;
-                var dsp = depthSpacePoints[idx];
-                if (float.IsInfinity(dsp.X) || float.IsInfinity(dsp.Y) || float.IsNaN(dsp.X) || float.IsNaN(dsp.Y))
-                    return false;
-
-                int dx = (int)Math.Round(dsp.X);
-                int dy = (int)Math.Round(dsp.Y);
-                if (dx < 0 || dy < 0 || dx >= localDepthWidth || dy >= localDepthHeight)
-                    return false;
-
-                ushort depth = depthDataSnapshot[dy * localDepthWidth + dx];
-                if (depth == 0)
-                    return false;
-
-                cameraPoint = coordinateMapper.MapDepthPointToCameraSpace(dsp, depth);
-                if (float.IsInfinity(cameraPoint.X) || float.IsInfinity(cameraPoint.Y) || float.IsInfinity(cameraPoint.Z))
-                    return false;
-                if (float.IsNaN(cameraPoint.X) || float.IsNaN(cameraPoint.Y) || float.IsNaN(cameraPoint.Z))
-                    return false;
-                return true;
+                System.Diagnostics.Debug.WriteLine(string.Format("Attempting to map color point at: {0},{1}", colorX, colorY));
+                // Reverse mapping: find the nearest depth pixel whose mapped color coordinate is close to (colorX,colorY)
+                int bestDx = -1, bestDy = -1;
+                double bestDistSq = double.MaxValue;
+                for (int dy = 0; dy < localDepthHeight; dy++)
+                {
+                    int row = dy * localDepthWidth;
+                    for (int dx = 0; dx < localDepthWidth; dx++)
+                    {
+                        int di = row + dx;
+                        var csp = depthToColorSnapshot[di];
+                        if (float.IsNaN(csp.X) || float.IsNaN(csp.Y)) continue;
+                        int cx = (int)Math.Round(csp.X);
+                        int cy = (int)Math.Round(csp.Y);
+                        if (cx < 0 || cy < 0 || cx >= localColorWidth || cy >= localColorHeight) continue;
+                        // measure distance in color space
+                        int ddx = cx - colorX;
+                        int ddy = cy - colorY;
+                        double distSq = (double)ddx * ddx + (double)ddy * ddy;
+                        if (distSq < bestDistSq)
+                        {
+                            bestDistSq = distSq;
+                            bestDx = dx;
+                            bestDy = dy;
+                            if (bestDistSq == 0) break;
+                        }
+                    }
+                    if (bestDistSq == 0) break;
+                }
+                if (bestDx >= 0 && bestDy >= 0)
+                {
+                    ushort depth = depthDataSnapshot[bestDy * localDepthWidth + bestDx];
+                    if (depth != 0)
+                    {
+                        var dsp = new DepthSpacePoint { X = bestDx, Y = bestDy };
+                        var mapped = coordinateMapper.MapDepthPointToCameraSpace(dsp, depth);
+                        if (!(float.IsInfinity(mapped.X) || float.IsInfinity(mapped.Y) || float.IsInfinity(mapped.Z) ||
+                              float.IsNaN(mapped.X) || float.IsNaN(mapped.Y) || float.IsNaN(mapped.Z)))
+                        {
+                            cameraPoint = mapped;
+                            return true;
+                        }
+                    }
+                }
+                return false;
             }
             catch (Exception ex)
             {

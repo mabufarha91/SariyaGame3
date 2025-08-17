@@ -40,6 +40,9 @@
     <Reference Include="System.Xml" />
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
     <Reference Include="System.Net.Http" />
@@ -78,9 +81,35 @@
       <DependentUpon>CalibrationWizardWindow.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
+    <Page Include="CalibrationWizard\Screen2_MarkerAlignment.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Compile Include="CalibrationWizard\Screen2_MarkerAlignment.xaml.cs">
+      <DependentUpon>Screen2_MarkerAlignment.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
+    <Page Include="CalibrationWizard\Screen3_TouchTest.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Compile Include="CalibrationWizard\Screen3_TouchTest.xaml.cs">
+      <DependentUpon>Screen3_TouchTest.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
+    <Page Include="CalibrationWizard\ProjectorWindow.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Compile Include="CalibrationWizard\ProjectorWindow.xaml.cs">
+      <DependentUpon>ProjectorWindow.xaml</DependentUpon>
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="KinectManager\KinectManager.cs" />
     <Compile Include="UI\MovablePointsCanvas.cs" />
     <Compile Include="Models\CalibrationPoint.cs" />
+    <Compile Include="Models\CalibrationConfig.cs" />
+    <Compile Include="Services\CalibrationStorage.cs" />
   </ItemGroup>
   <ItemGroup>
     <Page Include="CalibrationWizard\CalibrationWizardWindow.xaml">
