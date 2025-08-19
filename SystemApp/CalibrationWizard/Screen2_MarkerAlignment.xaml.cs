@@ -30,7 +30,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private double[] markerX = new double[4];
 		private double[] markerY = new double[4];
 		private BitmapSource qrBitmapSource;
-		private const int QrBaseSize = 120;
+		private const int QrBaseSize = 300;
 		private double _currentContrast = 1.2;
 		private double _currentBrightnessThreshold = 200.0;
 		private int _hueMin = 0;
@@ -252,10 +252,16 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private int DetectArucoOnBinary(Mat bw)
 		{
-			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict6X6_250);
+			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict7X7_250);
 			Point2f[][] corners;
 			int[] ids;
 			var parameters = new DetectorParameters();
+			// Fine-tune parameters for projector lighting
+			parameters.CornerRefinementMethod = CornerRefineMethod.Subpix;
+			parameters.AdaptiveThreshWinSizeMin = 5;
+			parameters.AdaptiveThreshWinSizeMax = 25;
+			parameters.AdaptiveThreshWinSizeStep = 5;
+			parameters.MinMarkerPerimeterRate = 0.02;
 			CvAruco.DetectMarkers(bw, dict, out corners, out ids, parameters, out _);
 			int found = 0;
 			if (corners != null)
@@ -367,7 +373,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				// Try to load from disk if available: .\\Markers\\aruco_6x6_250_id{ID}.png
 				string markersDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Markers");
-				string file = System.IO.Path.Combine(markersDir, $"aruco_6x6_250_id{id}.png");
+				string file = System.IO.Path.Combine(markersDir, $"aruco_7x7_250_id{id}.png");
 				if (System.IO.File.Exists(file))
 				{
 					var bmp = new BitmapImage();
