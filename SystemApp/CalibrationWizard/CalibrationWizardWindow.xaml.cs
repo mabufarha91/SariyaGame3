@@ -247,7 +247,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			double segLen = Math.Sqrt(dx * dx + dy * dy);
 			if (segLen < 1e-6)
 			{
-				MovablePoints.SetOverlay(null);
+				if (MovablePoints != null) MovablePoints.SetOverlay(null);
 				return;
 			}
 			double ux = dx / segLen, uy = dy / segLen;
@@ -261,7 +261,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var polygon = new System.Windows.Shapes.Polygon();
 			polygon.Fill = new SolidColorBrush(Color.FromArgb(120, 76, 175, 80));
 			polygon.Points = new PointCollection { a, b, c, d };
-			MovablePoints.SetOverlay(polygon);
+			SetOverlaySafe(polygon);
 		}
 
 		private void Draw2DQuadOverlay(System.Collections.Generic.List<Point> pts)
@@ -270,7 +270,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var polygon = new System.Windows.Shapes.Polygon();
 			polygon.Fill = new SolidColorBrush(Color.FromArgb(90, 76, 175, 80));
 			polygon.Points = new PointCollection { pts[0], pts[1], pts[2], pts[3] };
-			MovablePoints.SetOverlay(polygon);
+			SetOverlaySafe(polygon);
 		}
 
 		private void TryComputePlaneFromPoints()
@@ -417,7 +417,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var polygon = new System.Windows.Shapes.Polygon();
 			polygon.Fill = new SolidColorBrush(Color.FromArgb(90, 76, 175, 80));
 			polygon.Points = new PointCollection { a, b, c, d };
-			MovablePoints.SetOverlay(polygon);
+			SetOverlaySafe(polygon);
 			UpdateButtonStates(true);
 		}
 		
@@ -611,6 +611,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			cx /= 4.0; cy /= 4.0; cz /= 4.0;
 			double dist = System.Math.Sqrt(cx * cx + cy * cy + cz * cz);
 			MeasuresText.Text = string.Format("Measures: Area: {0:F2}m x {1:F2}m | Distance: {2:F2}m", width, height, dist);
+		}
+
+		private void SetOverlaySafe(System.Windows.UIElement overlay)
+		{
+			if (MovablePoints != null)
+			{
+				MovablePoints.SetOverlay(overlay);
+			}
 		}
 	}
 }

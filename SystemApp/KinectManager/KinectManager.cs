@@ -10,22 +10,30 @@ namespace KinectCalibrationWPF.KinectManager
         private KinectSensor kinectSensor;
         private ColorFrameReader colorFrameReader;
         private DepthFrameReader depthFrameReader;
+        private InfraredFrameReader infraredFrameReader;
         private BodyFrameReader bodyFrameReader;
         private CoordinateMapper coordinateMapper;
         private readonly object depthDataLock = new object();
         private ushort[] latestDepthData;
+        private readonly object infraredDataLock = new object();
+        private ushort[] latestInfraredData;
         private int depthWidth;
         private int depthHeight;
+        private int infraredWidth;
+        private int infraredHeight;
         private int colorWidth;
         private int colorHeight;
         private WriteableBitmap colorBitmap;
+        private WriteableBitmap infraredBitmap;
         private byte[] latestColorData;
         private readonly object colorDataLock = new object();
         private DateTime lastColorFrameTimeUtc;
         private DateTime lastDepthFrameTimeUtc;
+        private DateTime lastInfraredFrameTimeUtc;
         private ColorSpacePoint[] depthToColorPoints;
         private Body[] latestBodies;
         private readonly object bodyDataLock = new object();
+        private double infraredExposureGain = 1.0;
         
         public bool IsInitialized { get; private set; }
         public bool IsTestMode { get; private set; }
@@ -34,14 +42,18 @@ namespace KinectCalibrationWPF.KinectManager
         public int ColorHeight { get { return colorHeight; } }
         public int DepthWidth { get { return depthWidth; } }
         public int DepthHeight { get { return depthHeight; } }
+        public int InfraredWidth { get { return infraredWidth; } }
+        public int InfraredHeight { get { return infraredHeight; } }
         
         public event EventHandler<ColorFrameArrivedEventArgs> ColorFrameArrived;
         public event EventHandler<DepthFrameArrivedEventArgs> DepthFrameArrived;
+        public event EventHandler<InfraredFrameArrivedEventArgs> InfraredFrameArrived;
         public event EventHandler<BodyFrameArrivedEventArgs> BodyFrameArrived;
         
         // Debug counters to verify frame events
         public int colorFramesReceived = 0;
         public int depthFramesReceived = 0;
+        public int infraredFramesReceived = 0;
         
         public KinectManager()
         {
@@ -64,6 +76,7 @@ namespace KinectCalibrationWPF.KinectManager
                 // Initialize readers
                 colorFrameReader = kinectSensor.ColorFrameSource.OpenReader();
                 depthFrameReader = kinectSensor.DepthFrameSource.OpenReader();
+                infraredFrameReader = kinectSensor.InfraredFrameSource.OpenReader();
                 bodyFrameReader = kinectSensor.BodyFrameSource.OpenReader();
                 
                 // Get coordinate mapper
@@ -78,12 +91,17 @@ namespace KinectCalibrationWPF.KinectManager
                 var depthDesc = kinectSensor.DepthFrameSource.FrameDescription;
                 depthWidth = depthDesc.Width;
                 depthHeight = depthDesc.Height;
+                var infraredDesc = kinectSensor.InfraredFrameSource.FrameDescription;
+                infraredWidth = infraredDesc.Width;
+                infraredHeight = infraredDesc.Height;
+                latestInfraredData = new ushort[infraredDesc.LengthInPixels];
                 depthToColorPoints = new ColorSpacePoint[depthWidth * depthHeight];
                 latestBodies = new Body[kinectSensor.BodyFrameSource.BodyCount];
                 
                 // Subscribe to events
                 colorFrameReader.FrameArrived += ColorFrameReader_FrameArrived;
                 depthFrameReader.FrameArrived += DepthFrameReader_FrameArrived;
+                infraredFrameReader.FrameArrived += InfraredFrameReader_FrameArrived;
                 bodyFrameReader.FrameArrived += BodyFrameReader_FrameArrived;
                 kinectSensor.IsAvailableChanged += KinectSensor_IsAvailableChanged;
                 
@@ -127,6 +145,41 @@ namespace KinectCalibrationWPF.KinectManager
             {
                 System.Diagnostics.Debug.WriteLine(string.Format("Color frame update failed: {0}", ex.Message));
             }
+        }
+        
+        private void InfraredFrameReader_FrameArrived(object sender, InfraredFrameArrivedEventArgs e)
+        {
+            if (kinectSensor == null || !kinectSensor.IsAvailable || infraredFrameReader == null) return;
+            if (InfraredFrameArrived != null) { InfraredFrameArrived(this, e); }
+            try
+            {
+                using (var irFrame = e.FrameReference.AcquireFrame())
+                {
+                    if (irFrame == null) return;
+                    Interlocked.Increment(ref infraredFramesReceived);
+                    var frameDesc = irFrame.InfraredFrameSource.FrameDescription;
+                    if (latestInfraredData == null || latestInfraredData.Length != frameDesc.LengthInPixels)
+                    {
+                        latestInfraredData = new ushort[frameDesc.LengthInPixels];
+                    }
+                    irFrame.CopyFrameDataToArray(latestInfraredData);
+                    lock (infraredDataLock)
+                    {
+                        lastInfraredFrameTimeUtc = DateTime.UtcNow;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(string.Format("Infrared frame update failed: {0}", ex.Message));
+            }
+        }
+
+        public void SetInfraredExposureGain(double gain)
+        {
+            if (gain < 0.1) gain = 0.1;
+            if (gain > 10.0) gain = 10.0;
+            infraredExposureGain = gain;
         }
         
         private void DepthFrameReader_FrameArrived(object sender, DepthFrameArrivedEventArgs e)
@@ -222,9 +275,67 @@ namespace KinectCalibrationWPF.KinectManager
                 }
             }
 
+            // Return a non-frozen reference; do not Freeze() here to allow continuous updates
             return colorBitmap;
         }
 
+        public BitmapSource GetInfraredBitmap()
+        {
+            if (!IsInitialized || kinectSensor == null)
+                return CreateTestDepthBitmap();
+
+            using (var irFrame = infraredFrameReader != null ? infraredFrameReader.AcquireLatestFrame() : null)
+            {
+                if (irFrame == null)
+                {
+                    // Fallback to last buffered data if available
+                    lock (infraredDataLock)
+                    {
+                        if (latestInfraredData == null || latestInfraredData.Length == 0)
+                            return CreateTestDepthBitmap();
+                    }
+                }
+                else
+                {
+                    var frameDesc = irFrame.InfraredFrameSource.FrameDescription;
+                    if (latestInfraredData == null || latestInfraredData.Length != frameDesc.LengthInPixels)
+                    {
+                        latestInfraredData = new ushort[frameDesc.LengthInPixels];
+                    }
+                    irFrame.CopyFrameDataToArray(latestInfraredData);
+                    infraredWidth = frameDesc.Width;
+                    infraredHeight = frameDesc.Height;
+                }
+
+                // Convert IR data to BGRA bitmap with exposure gain
+                int width = infraredWidth > 0 ? infraredWidth : 512;
+                int height = infraredHeight > 0 ? infraredHeight : 424;
+                var pixels = new byte[width * height * 4];
+                ushort[] irSnapshot;
+                lock (infraredDataLock)
+                {
+                    if (latestInfraredData == null)
+                        return CreateTestDepthBitmap();
+                    irSnapshot = new ushort[latestInfraredData.Length];
+                    Array.Copy(latestInfraredData, irSnapshot, latestInfraredData.Length);
+                }
+                for (int i = 0; i < Math.Min(irSnapshot.Length, width * height); i++)
+                {
+                    double v = irSnapshot[i] * infraredExposureGain;
+                    if (v > ushort.MaxValue) v = ushort.MaxValue;
+                    byte intensity = (byte)(v / 256.0); // map 16-bit to 8-bit (approx)
+                    int idx = i * 4;
+                    pixels[idx] = intensity;
+                    pixels[idx + 1] = intensity;
+                    pixels[idx + 2] = intensity;
+                    pixels[idx + 3] = 255;
+                }
+                var bitmap = new WriteableBitmap(width, height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null);
+                bitmap.WritePixels(new System.Windows.Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+                return bitmap;
+            }
+        }
+        
         public bool IsColorStreamActive()
         {
             return (DateTime.UtcNow - lastColorFrameTimeUtc).TotalSeconds < 1.0;
@@ -473,6 +584,12 @@ namespace KinectCalibrationWPF.KinectManager
             {
                 depthFrameReader.Dispose();
                 depthFrameReader = null;
+            }
+
+            if (infraredFrameReader != null)
+            {
+                infraredFrameReader.Dispose();
+                infraredFrameReader = null;
             }
             
             if (bodyFrameReader != null)

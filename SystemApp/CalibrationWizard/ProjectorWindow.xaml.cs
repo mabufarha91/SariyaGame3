@@ -9,12 +9,21 @@ namespace KinectCalibrationWPF.CalibrationWizard
 	{
 		private Image[] markers;
 		private ScaleTransform[] scales;
+		private double[] baseWidths;
+		private double[] baseHeights;
 
 		public ProjectorWindow()
 		{
 			InitializeComponent();
 			markers = new[] { Marker0, Marker1, Marker2, Marker3 };
 			scales = new[] { (ScaleTransform)Scale0, (ScaleTransform)Scale1, (ScaleTransform)Scale2, (ScaleTransform)Scale3 };
+			baseWidths = new double[markers.Length];
+			baseHeights = new double[markers.Length];
+			for (int i = 0; i < markers.Length; i++)
+			{
+				baseWidths[i] = markers[i].Width;
+				baseHeights[i] = markers[i].Height;
+			}
 		}
 
 		public void SetMarkerPosition(int index, double x, double y)
@@ -30,6 +39,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				scales[i].ScaleX = scale;
 				scales[i].ScaleY = scale;
+				markers[i].Width = baseWidths[i] * scale;
+				markers[i].Height = baseHeights[i] * scale;
 			}
 		}
 
@@ -39,6 +50,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				img.Source = source;
 			}
+		}
+
+		public void SetMarkerSource(int index, BitmapSource source)
+		{
+			if (index < 0 || index >= markers.Length) return;
+			markers[index].Source = source;
 		}
 	}
 }

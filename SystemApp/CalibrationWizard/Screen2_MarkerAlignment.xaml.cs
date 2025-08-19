@@ -10,15 +10,32 @@ using Microsoft.Kinect;
 using System.Windows.Controls;
 using WF = System.Windows.Forms;
 using System.Windows.Media.Imaging;
+using KinectCalibrationWPF.Services;
+using KinectCalibrationWPF.Models;
+using System.Collections.Generic;
+using OpenCvSharp;
+using OpenCvSharp.WpfExtensions;
+using OpenCvSharp.Aruco;
 
 namespace KinectCalibrationWPF.CalibrationWizard
 {
-	public partial class Screen2_MarkerAlignment : Window
+	public partial class Screen2_MarkerAlignment : System.Windows.Window
 	{
 		private KinectManager.KinectManager kinectManager;
 		private DispatcherTimer cameraUpdateTimer;
 		private bool markersDetected = false;
 		private ProjectorWindow projectorWindow;
+		private List<System.Windows.Point> lastDetectedCentersColor = new List<System.Windows.Point>();
+		private const double NudgeStep = 5.0;
+		private double[] markerX = new double[4];
+		private double[] markerY = new double[4];
+		private BitmapSource qrBitmapSource;
+		private const int QrBaseSize = 120;
+		private double _currentContrast = 1.2;
+		private double _currentBrightnessThreshold = 200.0;
+		private int _hueMin = 0;
+		private int _satMin = 0;
+		private int _valMin = 200;
 
 		public Screen2_MarkerAlignment(KinectManager.KinectManager manager)
 		{
@@ -28,8 +45,31 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			cameraUpdateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
 			cameraUpdateTimer.Tick += (s, e) =>
 			{
-				var bmp = kinectManager != null ? kinectManager.GetColorBitmap() : null;
-				if (bmp != null) CameraFeedImage.Source = bmp;
+				try
+				{
+					var src = kinectManager != null ? kinectManager.GetColorBitmap() : null;
+					if (src != null)
+					{
+						using (var bgra = BitmapSourceConverter.ToMat(src))
+						using (var bgr = new Mat())
+						using (var hsv = new Mat())
+						using (var mask = new Mat())
+						{
+							if (!bgra.Empty())
+							{
+								Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
+								Cv2.CvtColor(bgr, hsv, ColorConversionCodes.BGR2HSV);
+								Cv2.InRange(hsv,
+									new Scalar(_hueMin, _satMin, _valMin),
+									new Scalar(179, 255, 255),
+									mask);
+								var wbMask = mask.ToWriteableBitmap();
+								CameraFeedImage.Source = wbMask;
+							}
+						}
+					}
+				}
+				catch { }
 				CameraStatusText.Text = (kinectManager != null && kinectManager.IsInitialized) ? "Camera: Connected" : "Camera: Not Available (Test Mode)";
 			};
 			cameraUpdateTimer.Start();
@@ -37,7 +77,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private void Screen2_MarkerAlignment_Loaded(object sender, RoutedEventArgs e)
 		{
-			// Create and display projector window on secondary monitor if available
 			projectorWindow = new ProjectorWindow();
 			var screens = WF.Screen.AllScreens;
 			if (screens.Length > 1)
@@ -50,192 +89,183 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				projectorWindow.Height = second.Height;
 			}
 			projectorWindow.Show();
-
-			// Initialize marker positions
+			this.Activate();
+			// Generate and display 4 unique ArUco markers on projector
+			for (int i = 0; i < 4; i++)
+			{
+				var bmp = GenerateArucoMarkerBitmap(i, QrBaseSize);
+				projectorWindow.SetMarkerSource(i, bmp);
+			}
+			// Default positions: four corners inset by margin
+			InitializeDefaultMarkerPositions();
 			ApplyMarkerPositions();
 			ApplyMarkerScale();
+		}
+
+		private void InitializeDefaultMarkerPositions()
+		{
+			double margin = 50.0;
+			double w = projectorWindow != null && projectorWindow.Width > 0 ? projectorWindow.Width : 1920.0;
+			double h = projectorWindow != null && projectorWindow.Height > 0 ? projectorWindow.Height : 1080.0;
+			double size = QrBaseSize * (QrSizeSlider != null ? QrSizeSlider.Value : 1.0);
+			// Top-left
+			markerX[0] = margin; markerY[0] = margin;
+			// Top-right
+			markerX[1] = Math.Max(margin, w - size - margin); markerY[1] = margin;
+			// Bottom-right
+			markerX[2] = Math.Max(margin, w - size - margin); markerY[2] = Math.Max(margin, h - size - margin);
+			// Bottom-left
+			markerX[3] = margin; markerY[3] = Math.Max(margin, h - size - margin);
 		}
 
 		private void ApplyMarkerPositions()
 		{
 			if (projectorWindow == null) return;
-			projectorWindow.SetMarkerPosition(0, M1X.Value, M1Y.Value);
-			projectorWindow.SetMarkerPosition(1, M2X.Value, M2Y.Value);
-			projectorWindow.SetMarkerPosition(2, M3X.Value, M3Y.Value);
-			projectorWindow.SetMarkerPosition(3, M4X.Value, M4Y.Value);
+			projectorWindow.SetMarkerPosition(0, markerX[0], markerY[0]);
+			projectorWindow.SetMarkerPosition(1, markerX[1], markerY[1]);
+			projectorWindow.SetMarkerPosition(2, markerX[2], markerY[2]);
+			projectorWindow.SetMarkerPosition(3, markerX[3], markerY[3]);
+			// No overlays on camera view; markers shown only on projector
 		}
 
 		private void ApplyMarkerScale()
 		{
 			if (projectorWindow == null) return;
-			projectorWindow.SetAllMarkersScale(MarkerSizeSlider.Value);
+			projectorWindow.SetAllMarkersScale(QrSizeSlider.Value);
+			// No overlays on camera view to scale
 		}
 
-		private void MarkerPositionSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-		{
-			ApplyMarkerPositions();
-		}
+		private void MarkerPositionSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { }
 
-		private void MarkerSizeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		private void QrSizeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
 		{
 			ApplyMarkerScale();
+			// Also push immediately to projector
+			if (projectorWindow != null)
+			{
+				projectorWindow.SetAllMarkersScale(e.NewValue);
+			}
+		}
+
+		private void BrightnessThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		{
+			_currentBrightnessThreshold = e.NewValue;
+		}
+
+		private void ContrastSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		{
+			_currentContrast = e.NewValue;
 		}
 
 		private void HideCameraButton_Click(object sender, RoutedEventArgs e)
 		{
-			CameraFeedImage.Visibility = Visibility.Collapsed;
+			if (CameraFeedImage.Visibility == Visibility.Visible)
+			{
+				CameraFeedImage.Visibility = Visibility.Collapsed;
+				HideCameraButton.Content = "Show Camera View";
+			}
+			else
+			{
+				CameraFeedImage.Visibility = Visibility.Visible;
+				HideCameraButton.Content = "Hide Camera View";
+			}
 		}
 
 		private void FindMarkersButton_Click(object sender, RoutedEventArgs e)
 		{
 			MarkersOverlay.Children.Clear();
+			lastDetectedCentersColor.Clear();
 			try
 			{
-				if (CameraFeedImage.Source == null)
+				StatusText.Text = "Starting marker detection...";
+				StatusText.Foreground = Brushes.SteelBlue;
+				var src = CameraFeedImage.Source as BitmapSource;
+				if (src == null || src.PixelWidth <= 0 || src.PixelHeight <= 0)
 				{
-					StatusText.Text = "Status: No camera frame";
+					StatusText.Text = "Status: Camera frame not ready, please try again";
 					StatusText.Foreground = Brushes.Orange;
 					return;
 				}
-				// Encode current frame to PNG bytes
-				var encoder = new PngBitmapEncoder();
-				encoder.Frames.Add(BitmapFrame.Create((BitmapSource)CameraFeedImage.Source));
-				byte[] pngBytes;
-				using (var ms = new MemoryStream())
+				StatusText.Text = "Camera frame acquired.";
+
+				int detected = 0;
+				using (var bgra = BitmapSourceConverter.ToMat(src))
+				using (var bgr = new Mat())
+				using (var hsv = new Mat())
+				using (var bw = new Mat())
 				{
-					encoder.Save(ms);
-					pngBytes = ms.ToArray();
+					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; return; }
+					StatusText.Text = "Image converted for processing.";
+					Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
+					Cv2.CvtColor(bgr, hsv, ColorConversionCodes.BGR2HSV);
+					Cv2.InRange(hsv,
+						new Scalar(_hueMin, _satMin, _valMin),
+						new Scalar(179, 255, 255),
+						bw);
+					StatusText.Text = "Image processed successfully.";
+					detected = DetectArucoOnBinary(bw);
 				}
 
-				int threshold = (int)Math.Max(0, Math.Min(255, CameraExposureSlider.Value * 255.0));
-				int detected = TryDetectQrWithOpenCv(pngBytes, threshold);
-				if (detected >= 4)
+				markersDetected = detected >= 4;
+				CalibrateButton.IsEnabled = markersDetected;
+				if (detected == 0)
 				{
-					CalibrateButton.IsEnabled = true;
-					StatusText.Text = string.Format("Status: Detected {0} markers", detected);
-					StatusText.Foreground = Brushes.Green;
-					markersDetected = true;
+					StatusText.Text = "No markers found. Adjust HSV and try again.";
+					StatusText.Foreground = Brushes.Orange;
+				}
+				else if (detected < 4)
+				{
+					StatusText.Text = $"Found {detected}/4 markers.";
+					StatusText.Foreground = Brushes.Orange;
 				}
 				else
 				{
-					CalibrateButton.IsEnabled = false;
-					StatusText.Text = string.Format("Status: Detected {0} markers", detected);
-					StatusText.Foreground = Brushes.Orange;
-					markersDetected = false;
+					StatusText.Text = "Success! 4 markers found.";
+					StatusText.Foreground = Brushes.Green;
 				}
+
+				// Reveal camera view again (if hidden) and show red dots only
+				CameraFeedImage.Visibility = Visibility.Visible;
+				HideCameraButton.Content = "Hide Camera View";
 			}
-			catch (Exception ex)
+			catch
 			{
-				StatusText.Text = "Status: Detection error";
+				StatusText.Text = "Status: Detection failed. Please adjust exposure and try again.";
 				StatusText.Foreground = Brushes.OrangeRed;
-				System.Diagnostics.Debug.WriteLine("FindMarkers error: " + ex.Message);
 			}
 		}
 
-		private int TryDetectQrWithOpenCv(byte[] pngBytes, int threshold)
+		private int DetectArucoOnBinary(Mat bw)
 		{
-			// Use reflection to avoid hard compile dependency if OpenCvSharp assemblies are not present
-			var asm = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "OpenCvSharp")
-					  ?? TryLoadAssembly("OpenCvSharp");
-			var asmExt = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a => a.GetName().Name == "OpenCvSharp.Extensions")
-					  ?? TryLoadAssembly("OpenCvSharp.Extensions");
-			if (asm == null)
-			{
-				StatusText.Text = "Status: OpenCvSharp not available";
-				StatusText.Foreground = Brushes.Orange;
-				return 0;
-			}
-
-			// Types
-			Type cv2Type = asm.GetType("OpenCvSharp.Cv2");
-			Type matType = asm.GetType("OpenCvSharp.Mat");
-			Type qrdType = asm.GetType("OpenCvSharp.QRCodeDetector");
-			if (cv2Type == null || matType == null || qrdType == null)
-			{
-				return 0;
-			}
-
-			// Mat src = Cv2.ImDecode(pngBytes, 1)
-			var imDecode = cv2Type.GetMethod("ImDecode", new Type[] { typeof(byte[]), typeof(int) });
-			object srcMat = imDecode.Invoke(null, new object[] { pngBytes, 1 });
-			// gray = new Mat(); bw = new Mat();
-			object grayMat = Activator.CreateInstance(matType);
-			object bwMat = Activator.CreateInstance(matType);
-			// Cv2.CvtColor(src, gray, 6) // BGR2GRAY
-			var cvtColor = cv2Type.GetMethod("CvtColor", new Type[] { matType, matType, typeof(int) });
-			cvtColor.Invoke(null, new object[] { srcMat, grayMat, 6 });
-			// Cv2.Threshold(gray, bw, threshold, 255, 0) // Binary
-			var thresholdMi = cv2Type.GetMethod("Threshold", new Type[] { matType, matType, typeof(double), typeof(double), typeof(int) });
-			thresholdMi.Invoke(null, new object[] { grayMat, bwMat, (double)threshold, 255.0, 0 });
-
-			// detector = new QRCodeDetector();
-			object detector = Activator.CreateInstance(qrdType);
+			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict6X6_250);
+			Point2f[][] corners;
+			int[] ids;
+			var parameters = new DetectorParameters();
+			CvAruco.DetectMarkers(bw, dict, out corners, out ids, parameters, out _);
 			int found = 0;
-			// Try DetectMulti first: bool DetectMulti(Mat img, out Point2f[][] points)
-			var detectMulti = qrdType.GetMethod("DetectMulti", new Type[] { matType, null });
-			if (detectMulti != null)
+			if (corners != null)
 			{
-				// Build out param: Point2f[][]
-				Type p2fType = asm.GetType("OpenCvSharp.Point2f");
-				Type p2fArrayType = p2fType.MakeArrayType();
-				Type p2fJaggedType = p2fArrayType.MakeArrayType();
-				var parms = detectMulti.GetParameters();
-				object[] args = new object[] { bwMat, null };
-				bool ok = (bool)detectMulti.Invoke(detector, args);
-				if (ok && args[1] != null)
+				for (int i = 0; i < corners.Length; i++)
 				{
-					var jagged = (Array)args[1];
-					for (int i = 0; i < jagged.Length; i++)
-					{
-						var quad = (Array)jagged.GetValue(i);
-						if (quad != null && quad.Length >= 4)
-						{
-							DrawMarkerCenterFromPoint2fArray(quad, asm);
-							found++;
-						}
-					}
-					return found;
-				}
-			}
-			// Fallback: Detect single
-			var detect = qrdType.GetMethod("Detect", new Type[] { matType, null });
-			if (detect != null)
-			{
-				Type p2fType = asm.GetType("OpenCvSharp.Point2f");
-				Type p2fArrayType = p2fType.MakeArrayType();
-				object[] args = new object[] { bwMat, null };
-				bool ok = (bool)detect.Invoke(detector, args);
-				if (ok && args[1] != null)
-				{
-					var quad = (Array)args[1];
+					var quad = corners[i];
 					if (quad != null && quad.Length >= 4)
 					{
-						DrawMarkerCenterFromPoint2fArray(quad, asm);
-						found = 1;
+						AddMarkerFromQuad(quad);
+						found++;
 					}
 				}
 			}
 			return found;
 		}
 
-		private Assembly TryLoadAssembly(string name)
-		{
-			try { return Assembly.Load(name); } catch { return null; }
-		}
+		// removed legacy QR helper
 
-		private void DrawMarkerCenterFromPoint2fArray(Array pointArray, Assembly opencvAsm)
+		private void AddMarkerFromQuad(Point2f[] quad)
 		{
-			// Compute centroid in color space and map to overlay coordinates
 			double cx = 0, cy = 0;
-			int n = Math.Min(4, pointArray.Length);
-			for (int i = 0; i < n; i++)
-			{
-				object p = pointArray.GetValue(i);
-				float px = (float)p.GetType().GetField("X").GetValue(p);
-				float py = (float)p.GetType().GetField("Y").GetValue(p);
-				cx += px; cy += py;
-			}
-			cx /= n; cy /= n;
+			for (int i = 0; i < 4; i++) { cx += quad[i].X; cy += quad[i].Y; }
+			cx /= 4.0; cy /= 4.0;
+			lastDetectedCentersColor.Add(new System.Windows.Point(cx, cy));
 			var canvasPt = ColorToCanvas(new System.Windows.Point(cx, cy));
 			var dot = new Ellipse { Width = 18, Height = 18, Fill = Brushes.Red, Stroke = Brushes.White, StrokeThickness = 2 };
 			Canvas.SetLeft(dot, canvasPt.X - 9);
@@ -262,17 +292,46 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			return new System.Windows.Point(x, y);
 		}
 
+		private void NudgeM1_Up(object sender, RoutedEventArgs e) { markerY[0] = Math.Max(0, markerY[0] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM1_Down(object sender, RoutedEventArgs e) { markerY[0] = Math.Min(1080, markerY[0] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM1_Left(object sender, RoutedEventArgs e) { markerX[0] = Math.Max(0, markerX[0] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM1_Right(object sender, RoutedEventArgs e) { markerX[0] = Math.Min(1920, markerX[0] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM2_Up(object sender, RoutedEventArgs e) { markerY[1] = Math.Max(0, markerY[1] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM2_Down(object sender, RoutedEventArgs e) { markerY[1] = Math.Min(1080, markerY[1] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM2_Left(object sender, RoutedEventArgs e) { markerX[1] = Math.Max(0, markerX[1] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM2_Right(object sender, RoutedEventArgs e) { markerX[1] = Math.Min(1920, markerX[1] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM3_Up(object sender, RoutedEventArgs e) { markerY[2] = Math.Max(0, markerY[2] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM3_Down(object sender, RoutedEventArgs e) { markerY[2] = Math.Min(1080, markerY[2] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM3_Left(object sender, RoutedEventArgs e) { markerX[2] = Math.Max(0, markerX[2] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM3_Right(object sender, RoutedEventArgs e) { markerX[2] = Math.Min(1920, markerX[2] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM4_Up(object sender, RoutedEventArgs e) { markerY[3] = Math.Max(0, markerY[3] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM4_Down(object sender, RoutedEventArgs e) { markerY[3] = Math.Min(1080, markerY[3] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM4_Left(object sender, RoutedEventArgs e) { markerX[3] = Math.Max(0, markerX[3] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM4_Right(object sender, RoutedEventArgs e) { markerX[3] = Math.Min(1920, markerX[3] + NudgeStep); ApplyMarkerPositions(); }
+
 		private void CalibrateButton_Click(object sender, RoutedEventArgs e)
 		{
 			if (!markersDetected)
 			{
-				StatusText.Text = "Status: No markers detected";
+				StatusText.Text = "Status: No QRs detected";
 				StatusText.Foreground = Brushes.Orange;
 				return;
 			}
 			StatusText.Text = "Status: CALIBRATED";
 			StatusText.Foreground = Brushes.Green;
 			NextButton.IsEnabled = true;
+
+			var cfg = CalibrationStorage.Load() ?? new CalibrationConfig();
+			cfg.ProjectorMarkerPositions.Clear();
+			cfg.ProjectorMarkerPositions.Add(new System.Windows.Point(markerX[0], markerY[0]));
+			cfg.ProjectorMarkerPositions.Add(new System.Windows.Point(markerX[1], markerY[1]));
+			cfg.ProjectorMarkerPositions.Add(new System.Windows.Point(markerX[2], markerY[2]));
+			cfg.ProjectorMarkerPositions.Add(new System.Windows.Point(markerX[3], markerY[3]));
+			cfg.ProjectorMarkerScale = QrSizeSlider.Value;
+			cfg.DetectionExposure = ValueSlider != null ? ValueSlider.Value : _currentBrightnessThreshold;
+			cfg.DetectedMarkerCentersColor = new List<System.Windows.Point>(lastDetectedCentersColor);
+			cfg.SavedUtc = DateTime.UtcNow;
+			try { CalibrationStorage.Save(cfg); } catch { }
 		}
 
 		private void NextButton_Click(object sender, RoutedEventArgs e)
@@ -285,6 +344,39 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			projectorWindow?.Close();
 			this.Close();
+		}
+
+		private BitmapSource GenerateArucoMarkerBitmap(int id, int size)
+		{
+			// Placeholder: high-contrast square with id text; replace with real ArUco images if available
+			using (var img = new Mat(size, size, MatType.CV_8UC1, Scalar.All(255)))
+			{
+				int border = Math.Max(6, size / 12);
+				Cv2.Rectangle(img, new OpenCvSharp.Rect(border, border, size - 2 * border, size - 2 * border), Scalar.All(0), thickness: 3);
+				Cv2.PutText(img, id.ToString(), new OpenCvSharp.Point(size / 3, size / 2), HersheyFonts.HersheySimplex, 1.0, Scalar.All(0), 2);
+				using (var imgColor = new Mat())
+				{
+					Cv2.CvtColor(img, imgColor, ColorConversionCodes.GRAY2BGRA);
+					var wb = imgColor.ToWriteableBitmap();
+					wb.Freeze();
+					return wb;
+				}
+			}
+		}
+
+		private void HueSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		{
+			_hueMin = (int)e.NewValue;
+		}
+
+		private void SaturationSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		{
+			_satMin = (int)e.NewValue;
+		}
+
+		private void ValueSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		{
+			_valMin = (int)e.NewValue;
 		}
 	}
 }

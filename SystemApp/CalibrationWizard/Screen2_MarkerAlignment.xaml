@@ -16,8 +16,8 @@
 		</Border>
 		<Grid Grid.Row="1" Margin="20">
 			<Grid.ColumnDefinitions>
+				<ColumnDefinition Width="1*"/>
 				<ColumnDefinition Width="2*"/>
-				<ColumnDefinition Width="*"/>
 			</Grid.ColumnDefinitions>
 			<Border Grid.Column="0" Background="White" CornerRadius="8" Margin="0,0,10,0">
 				<Grid>
@@ -37,45 +37,127 @@
 				</Grid>
 			</Border>
 			<Border Grid.Column="1" Background="White" CornerRadius="8" Margin="10,0,0,0">
-				<StackPanel Margin="20">
-					<TextBlock Text="Controls" FontSize="16" FontWeight="Bold" Foreground="#424242"/>
-					<Button x:Name="HideCameraButton" Content="Hide Camera View" Style="{StaticResource WizardButtonStyle}" Margin="0,10,0,10" Click="HideCameraButton_Click"/>
-					<GroupBox Header="Marker Controllers" Margin="0,10,0,10">
-						<StackPanel>
-							<UniformGrid Columns="2" Rows="4" Margin="0,10,0,0">
-								<TextBlock Text="Marker 1 X" VerticalAlignment="Center"/>
-								<Slider x:Name="M1X" Minimum="0" Maximum="1920" Value="100" ValueChanged="MarkerPositionSlider_ValueChanged"/>
-								<TextBlock Text="Marker 1 Y" VerticalAlignment="Center"/>
-								<Slider x:Name="M1Y" Minimum="0" Maximum="1080" Value="100" ValueChanged="MarkerPositionSlider_ValueChanged"/>
-								<TextBlock Text="Marker 2 X" VerticalAlignment="Center"/>
-								<Slider x:Name="M2X" Minimum="0" Maximum="1920" Value="1820" ValueChanged="MarkerPositionSlider_ValueChanged"/>
-								<TextBlock Text="Marker 2 Y" VerticalAlignment="Center"/>
-								<Slider x:Name="M2Y" Minimum="0" Maximum="1080" Value="100" ValueChanged="MarkerPositionSlider_ValueChanged"/>
-								<TextBlock Text="Marker 3 X" VerticalAlignment="Center"/>
-								<Slider x:Name="M3X" Minimum="0" Maximum="1920" Value="1820" ValueChanged="MarkerPositionSlider_ValueChanged"/>
-								<TextBlock Text="Marker 3 Y" VerticalAlignment="Center"/>
-								<Slider x:Name="M3Y" Minimum="0" Maximum="1080" Value="980" ValueChanged="MarkerPositionSlider_ValueChanged"/>
-								<TextBlock Text="Marker 4 X" VerticalAlignment="Center"/>
-								<Slider x:Name="M4X" Minimum="0" Maximum="1920" Value="100" ValueChanged="MarkerPositionSlider_ValueChanged"/>
-								<TextBlock Text="Marker 4 Y" VerticalAlignment="Center"/>
-								<Slider x:Name="M4Y" Minimum="0" Maximum="1080" Value="980" ValueChanged="MarkerPositionSlider_ValueChanged"/>
-							</UniformGrid>
-						</StackPanel>
+				<Grid Margin="20">
+					<Grid.RowDefinitions>
+						<RowDefinition Height="Auto"/>
+						<RowDefinition Height="*"/>
+						<RowDefinition Height="Auto"/>
+						<RowDefinition Height="Auto"/>
+					</Grid.RowDefinitions>
+					<TextBlock Grid.Row="0" Text="Controls" FontSize="16" FontWeight="Bold" Foreground="#424242"/>
+					<!-- Hide/Show Camera button moved to bottom action bar -->
+					<Grid Grid.Row="1">
+						<Grid.ColumnDefinitions>
+							<ColumnDefinition Width="*"/>
+							<ColumnDefinition Width="2*"/>
+						</Grid.ColumnDefinitions>
+						<GroupBox Grid.Column="0" Header="Detection Settings" Margin="0,0,5,0">
+							<StackPanel Margin="10">
+								<TextBlock Text="QR Size"/>
+								<Slider x:Name="QrSizeSlider" Minimum="0.5" Maximum="3.0" Value="1.0" Margin="0,4,0,0" ValueChanged="QrSizeSlider_ValueChanged"/>
+								<TextBlock Text="Hue (0-179)" Margin="0,10,0,0"/>
+								<Slider x:Name="HueSlider" Minimum="0" Maximum="179" Value="0" Margin="0,4,0,0" ValueChanged="HueSlider_ValueChanged"/>
+								<TextBlock Text="Saturation (0-255)" Margin="0,10,0,0"/>
+								<Slider x:Name="SaturationSlider" Minimum="0" Maximum="255" Value="0" Margin="0,4,0,0" ValueChanged="SaturationSlider_ValueChanged"/>
+								<TextBlock Text="Value/Brightness (0-255)" Margin="0,10,0,0"/>
+								<Slider x:Name="ValueSlider" Minimum="0" Maximum="255" Value="200" Margin="0,4,0,0" ValueChanged="ValueSlider_ValueChanged"/>
+								<StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+									<Button x:Name="FindMarkersButton" Content="Find Markers" Style="{StaticResource WizardButtonStyle}" Click="FindMarkersButton_Click"/>
+								</StackPanel>
+								<TextBlock x:Name="StatusText" Text="Status: Not Calibrated" Margin="0,10,0,0" Foreground="#B71C1C"/>
+							</StackPanel>
+						</GroupBox>
+						<GroupBox Grid.Column="1" Header="QR Controllers" Margin="5,0,0,0" MaxHeight="320">
+							<UniformGrid Columns="2" Rows="2" Margin="10">
+								<Grid>
+									<Grid.RowDefinitions>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+									</Grid.RowDefinitions>
+									<Grid.ColumnDefinitions>
+										<ColumnDefinition Width="Auto"/>
+										<ColumnDefinition Width="Auto"/>
+										<ColumnDefinition Width="Auto"/>
+									</Grid.ColumnDefinitions>
+									<TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="QR 1" FontWeight="Bold" HorizontalAlignment="Center"/>
+									<RepeatButton Grid.Row="1" Grid.Column="1" Content="▲" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM1_Up"/>
+									<RepeatButton Grid.Row="2" Grid.Column="0" Content="◀" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM1_Left"/>
+									<RepeatButton Grid.Row="2" Grid.Column="1" Content="●" Width="36" Height="28" IsEnabled="False"/>
+									<RepeatButton Grid.Row="2" Grid.Column="2" Content="▶" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM1_Right"/>
+									<RepeatButton Grid.Row="3" Grid.Column="1" Content="▼" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM1_Down"/>
+								</Grid>
+
+								<Grid>
+									<Grid.RowDefinitions>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+									</Grid.RowDefinitions>
+									<Grid.ColumnDefinitions>
+										<ColumnDefinition Width="Auto"/>
+										<ColumnDefinition Width="Auto"/>
+										<ColumnDefinition Width="Auto"/>
+									</Grid.ColumnDefinitions>
+									<TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="QR 2" FontWeight="Bold" HorizontalAlignment="Center"/>
+									<RepeatButton Grid.Row="1" Grid.Column="1" Content="▲" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM2_Up"/>
+									<RepeatButton Grid.Row="2" Grid.Column="0" Content="◀" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM2_Left"/>
+									<RepeatButton Grid.Row="2" Grid.Column="1" Content="●" Width="36" Height="28" IsEnabled="False"/>
+									<RepeatButton Grid.Row="2" Grid.Column="2" Content="▶" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM2_Right"/>
+									<RepeatButton Grid.Row="3" Grid.Column="1" Content="▼" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM2_Down"/>
+								</Grid>
+
+								<Grid>
+									<Grid.RowDefinitions>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+									</Grid.RowDefinitions>
+									<Grid.ColumnDefinitions>
+										<ColumnDefinition Width="Auto"/>
+										<ColumnDefinition Width="Auto"/>
+										<ColumnDefinition Width="Auto"/>
+									</Grid.ColumnDefinitions>
+									<TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="QR 3" FontWeight="Bold" HorizontalAlignment="Center"/>
+									<RepeatButton Grid.Row="1" Grid.Column="1" Content="▲" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM3_Up"/>
+									<RepeatButton Grid.Row="2" Grid.Column="0" Content="◀" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM3_Left"/>
+									<RepeatButton Grid.Row="2" Grid.Column="1" Content="●" Width="36" Height="28" IsEnabled="False"/>
+									<RepeatButton Grid.Row="2" Grid.Column="2" Content="▶" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM3_Right"/>
+									<RepeatButton Grid.Row="3" Grid.Column="1" Content="▼" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM3_Down"/>
+								</Grid>
+
+								<Grid>
+									<Grid.RowDefinitions>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+										<RowDefinition Height="Auto"/>
+									</Grid.RowDefinitions>
+									<Grid.ColumnDefinitions>
+										<ColumnDefinition Width="Auto"/>
+										<ColumnDefinition Width="Auto"/>
+										<ColumnDefinition Width="Auto"/>
+									</Grid.ColumnDefinitions>
+									<TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="QR 4" FontWeight="Bold" HorizontalAlignment="Center"/>
+									<RepeatButton Grid.Row="1" Grid.Column="1" Content="▲" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM4_Up"/>
+									<RepeatButton Grid.Row="2" Grid.Column="0" Content="◀" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM4_Left"/>
+									<RepeatButton Grid.Row="2" Grid.Column="1" Content="●" Width="36" Height="28" IsEnabled="False"/>
+									<RepeatButton Grid.Row="2" Grid.Column="2" Content="▶" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM4_Right"/>
+									<RepeatButton Grid.Row="3" Grid.Column="1" Content="▼" Width="36" Height="28" Delay="200" Interval="50" Click="NudgeM4_Down"/>
+								</Grid>
+						</UniformGrid>
 					</GroupBox>
-					<StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-						<TextBlock Text="Marker Size" VerticalAlignment="Center" Margin="0,0,10,0"/>
-						<Slider x:Name="MarkerSizeSlider" Minimum="0.5" Maximum="3.0" Value="1.0" Width="200" ValueChanged="MarkerSizeSlider_ValueChanged"/>
+					</Grid>
+					<StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,10,0,0">
+						<Button x:Name="CalibrateButton" Content="Calibrate" Width="120" Style="{StaticResource WizardButtonStyle}" IsEnabled="False" Click="CalibrateButton_Click"/>
+						<Button x:Name="NextButton" Content="Next" Width="120" Style="{StaticResource WizardButtonStyle}" IsEnabled="False" Click="NextButton_Click"/>
+						<Button x:Name="CancelButton" Content="Cancel" Width="120" Margin="10,0,0,0" Style="{StaticResource WizardButtonStyle}" Background="#F44336" Click="CancelButton_Click"/>
+						<Button x:Name="HideCameraButton" Content="Hide Camera View" Width="120" Margin="10,0,0,0" Style="{StaticResource WizardButtonStyle}" Click="HideCameraButton_Click"/>
 					</StackPanel>
-					<StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-						<TextBlock Text="Camera Exposure" VerticalAlignment="Center" Margin="0,0,10,0"/>
-						<Slider x:Name="CameraExposureSlider" Minimum="0" Maximum="1" Value="0.5" Width="200"/>
-					</StackPanel>
-					<Button x:Name="FindMarkersButton" Content="Find Markers" Margin="0,20,0,0" Style="{StaticResource WizardButtonStyle}" Click="FindMarkersButton_Click"/>
-					<Button x:Name="CalibrateButton" Content="Calibrate" Margin="0,10,0,0" Style="{StaticResource WizardButtonStyle}" IsEnabled="False" Click="CalibrateButton_Click"/>
-					<TextBlock x:Name="StatusText" Text="Status: Not Calibrated" Margin="0,20,0,0" Foreground="#B71C1C"/>
-					<Button x:Name="NextButton" Content="Next" Margin="0,20,0,0" Style="{StaticResource WizardButtonStyle}" IsEnabled="False" Click="NextButton_Click"/>
-					<Button x:Name="CancelButton" Content="Cancel" Margin="0,10,0,0" Style="{StaticResource WizardButtonStyle}" Background="#F44336" Click="CancelButton_Click"/>
-				</StackPanel>
+				</Grid>
 			</Border>
 		</Grid>
 		<Border Grid.Row="2" Background="#424242" Padding="10">

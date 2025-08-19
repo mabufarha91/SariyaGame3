@@ -22,6 +22,16 @@ namespace KinectCalibrationWPF.Models
 		[DataMember]
 		public DateTime SavedUtc { get; set; }
 
+		// Screen 2 additions: projector alignment and detection settings
+		[DataMember]
+		public List<Point> ProjectorMarkerPositions { get; set; } // projector canvas pixels for 4 markers
+		[DataMember]
+		public double ProjectorMarkerScale { get; set; }
+		[DataMember]
+		public double DetectionExposure { get; set; } // 0..1
+		[DataMember]
+		public List<Point> DetectedMarkerCentersColor { get; set; } // detected centers in color-space pixels
+
 		public CalibrationConfig()
 		{
 			CornerPointsNormalized = new List<Point>();
@@ -30,6 +40,10 @@ namespace KinectCalibrationWPF.Models
 			PlaneThresholdMeters = 0.03; // default 3 cm
 			SensorToWorldTransform = CreateIdentity4x4();
 			SavedUtc = DateTime.UtcNow;
+			ProjectorMarkerPositions = new List<Point>();
+			DetectedMarkerCentersColor = new List<Point>();
+			ProjectorMarkerScale = 1.0;
+			DetectionExposure = 0.5;
 		}
 
 		private static double[,] CreateIdentity4x4()
