@@ -30,6 +30,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private double[] markerX = new double[4];
 		private double[] markerY = new double[4];
 		private BitmapSource qrBitmapSource;
+		private bool _usingRealMarkers = false;
 		private const int QrBaseSize = 300;
 		private double _currentContrast = 1.2;
 		private double _currentBrightnessThreshold = 200.0;
@@ -106,6 +107,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				var bmp = GenerateArucoMarkerBitmap(i, QrBaseSize);
 				projectorWindow.SetMarkerSource(i, bmp);
+			}
+			if (_usingRealMarkers)
+			{
+				AppendStatus("Projector: Using real ArUco marker PNGs (7x7_250).");
+			}
+			else
+			{
+				AppendStatus("WARNING: Projector markers are placeholders (not real ArUco). Place 7x7_250 PNGs in bin/Debug/Markers or bin/Release/Markers.");
 			}
 			// Default positions: four corners inset by margin
 			InitializeDefaultMarkerPositions();
@@ -270,13 +279,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				string baseDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Diagnostics");
+				string baseDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics");
 				if (!Directory.Exists(baseDir)) Directory.CreateDirectory(baseDir);
 				string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
 				Cv2.ImWrite(System.IO.Path.Combine(baseDir, $"color_{ts}.png"), bgr);
 				Cv2.ImWrite(System.IO.Path.Combine(baseDir, $"gray_{ts}.png"), gray);
 				Cv2.ImWrite(System.IO.Path.Combine(baseDir, $"hsvmask_{ts}.png"), bw);
-				AppendStatus($"Saved diagnostics to Diagnostics (timestamp {ts}).");
+				AppendStatus($"Saved diagnostics to {baseDir} (timestamp {ts}).");
 			}
 			catch { }
 		}
@@ -484,6 +493,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					bmp.UriSource = new Uri(file, UriKind.Absolute);
 					bmp.EndInit();
 					bmp.Freeze();
+					_usingRealMarkers = true;
 					return bmp;
 				}
 			}
