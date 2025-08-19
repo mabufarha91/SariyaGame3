@@ -363,14 +363,37 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private BitmapSource GenerateArucoMarkerBitmap(int id, int size)
 		{
-			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict6X6_250);
-			using (var marker = CvAruco.GenerateImageMarker(dict, id, size, 1))
-			using (var bgra = new Mat())
+			try
 			{
-				Cv2.CvtColor(marker, bgra, ColorConversionCodes.GRAY2BGRA);
-				var wb = bgra.ToWriteableBitmap();
-				wb.Freeze();
-				return wb;
+				// Try to load from disk if available: .\\Markers\\aruco_6x6_250_id{ID}.png
+				string markersDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Markers");
+				string file = System.IO.Path.Combine(markersDir, $"aruco_6x6_250_id{id}.png");
+				if (System.IO.File.Exists(file))
+				{
+					var bmp = new BitmapImage();
+					bmp.BeginInit();
+					bmp.CacheOption = BitmapCacheOption.OnLoad;
+					bmp.UriSource = new Uri(file, UriKind.Absolute);
+					bmp.EndInit();
+					bmp.Freeze();
+					return bmp;
+				}
+			}
+			catch { }
+
+			// Fallback placeholder if marker files are missing
+			using (var img = new Mat(size, size, MatType.CV_8UC1, Scalar.All(255)))
+			{
+				int border = Math.Max(6, size / 12);
+				Cv2.Rectangle(img, new OpenCvSharp.Rect(border, border, size - 2 * border, size - 2 * border), Scalar.All(0), thickness: 3);
+				Cv2.PutText(img, id.ToString(), new OpenCvSharp.Point(size / 3, size / 2), HersheyFonts.HersheySimplex, 1.0, Scalar.All(0), 2);
+				using (var imgColor = new Mat())
+				{
+					Cv2.CvtColor(img, imgColor, ColorConversionCodes.GRAY2BGRA);
+					var wb = imgColor.ToWriteableBitmap();
+					wb.Freeze();
+					return wb;
+				}
 			}
 		}
 
