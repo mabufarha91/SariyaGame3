@@ -90,3 +90,4 @@ ipch/
 # Logs / dumps
 *.log
 *.dmp
+/packages/

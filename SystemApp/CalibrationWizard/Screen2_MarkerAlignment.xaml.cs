@@ -43,36 +43,47 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			kinectManager = manager;
 			Loaded += Screen2_MarkerAlignment_Loaded;
 			cameraUpdateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
-			cameraUpdateTimer.Tick += (s, e) =>
+			cameraUpdateTimer.Tick += cameraUpdateTimer_Tick;
+			cameraUpdateTimer.Start();
+		}
+
+		private void cameraUpdateTimer_Tick(object sender, EventArgs e)
+		{
+			try
 			{
-				try
+				var src = kinectManager != null ? kinectManager.GetColorBitmap() : null;
+				if (src != null)
 				{
-					var src = kinectManager != null ? kinectManager.GetColorBitmap() : null;
-					if (src != null)
+					// Always show the unprocessed color feed
+					CameraFeedImage.Source = src;
+
+					// Also produce and show the real-time HSV mask in black & white
+					int hueMin = HueSlider != null ? (int)HueSlider.Value : _hueMin;
+					int satMin = SaturationSlider != null ? (int)SaturationSlider.Value : _satMin;
+					int valMin = ValueSlider != null ? (int)ValueSlider.Value : _valMin;
+
+					using (var bgra = BitmapSourceConverter.ToMat(src))
+					using (var bgr = new Mat())
+					using (var hsv = new Mat())
+					using (var mask = new Mat())
 					{
-						using (var bgra = BitmapSourceConverter.ToMat(src))
-						using (var bgr = new Mat())
-						using (var hsv = new Mat())
-						using (var mask = new Mat())
+						if (!bgra.Empty())
 						{
-							if (!bgra.Empty())
-							{
-								Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
-								Cv2.CvtColor(bgr, hsv, ColorConversionCodes.BGR2HSV);
-								Cv2.InRange(hsv,
-									new Scalar(_hueMin, _satMin, _valMin),
-									new Scalar(179, 255, 255),
-									mask);
-								var wbMask = mask.ToWriteableBitmap();
-								CameraFeedImage.Source = wbMask;
-							}
+							Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
+							Cv2.CvtColor(bgr, hsv, ColorConversionCodes.BGR2HSV);
+							Cv2.InRange(hsv,
+								new Scalar(hueMin, satMin, valMin),
+								new Scalar(179, 255, 255),
+								mask);
+							var wbMask = mask.ToWriteableBitmap();
+							wbMask.Freeze();
+							FilteredCameraFeedImage.Source = wbMask;
 						}
 					}
 				}
-				catch { }
-				CameraStatusText.Text = (kinectManager != null && kinectManager.IsInitialized) ? "Camera: Connected" : "Camera: Not Available (Test Mode)";
-			};
-			cameraUpdateTimer.Start();
+			}
+			catch { }
+			CameraStatusText.Text = (kinectManager != null && kinectManager.IsInitialized) ? "Camera: Connected" : "Camera: Not Available (Test Mode)";
 		}
 
 		private void Screen2_MarkerAlignment_Loaded(object sender, RoutedEventArgs e)
@@ -179,7 +190,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				StatusText.Text = "Starting marker detection...";
 				StatusText.Foreground = Brushes.SteelBlue;
-				var src = CameraFeedImage.Source as BitmapSource;
+				// Get a fresh color frame and process it now; do not use the displayed image
+				var src = kinectManager != null ? kinectManager.GetColorBitmap() : null;
 				if (src == null || src.PixelWidth <= 0 || src.PixelHeight <= 0)
 				{
 					StatusText.Text = "Status: Camera frame not ready, please try again";
@@ -198,8 +210,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					StatusText.Text = "Image converted for processing.";
 					Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
 					Cv2.CvtColor(bgr, hsv, ColorConversionCodes.BGR2HSV);
+					int hueMin = HueSlider != null ? (int)HueSlider.Value : _hueMin;
+					int satMin = SaturationSlider != null ? (int)SaturationSlider.Value : _satMin;
+					int valMin = ValueSlider != null ? (int)ValueSlider.Value : _valMin;
 					Cv2.InRange(hsv,
-						new Scalar(_hueMin, _satMin, _valMin),
+						new Scalar(hueMin, satMin, valMin),
 						new Scalar(179, 255, 255),
 						bw);
 					StatusText.Text = "Image processed successfully.";
@@ -240,7 +255,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict6X6_250);
 			Point2f[][] corners;
 			int[] ids;
-			var parameters = new DetectorParameters();
+			var parameters = DetectorParameters.Create();
 			CvAruco.DetectMarkers(bw, dict, out corners, out ids, parameters, out _);
 			int found = 0;
 			if (corners != null)
@@ -348,19 +363,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private BitmapSource GenerateArucoMarkerBitmap(int id, int size)
 		{
-			// Placeholder: high-contrast square with id text; replace with real ArUco images if available
-			using (var img = new Mat(size, size, MatType.CV_8UC1, Scalar.All(255)))
+			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict6X6_250);
+			using (var marker = new Mat())
+			using (var bgra = new Mat())
 			{
-				int border = Math.Max(6, size / 12);
-				Cv2.Rectangle(img, new OpenCvSharp.Rect(border, border, size - 2 * border, size - 2 * border), Scalar.All(0), thickness: 3);
-				Cv2.PutText(img, id.ToString(), new OpenCvSharp.Point(size / 3, size / 2), HersheyFonts.HersheySimplex, 1.0, Scalar.All(0), 2);
-				using (var imgColor = new Mat())
-				{
-					Cv2.CvtColor(img, imgColor, ColorConversionCodes.GRAY2BGRA);
-					var wb = imgColor.ToWriteableBitmap();
-					wb.Freeze();
-					return wb;
-				}
+				CvAruco.DrawMarker(dict, id, size, marker, 1);
+				Cv2.CvtColor(marker, bgra, ColorConversionCodes.GRAY2BGRA);
+				var wb = bgra.ToWriteableBitmap();
+				wb.Freeze();
+				return wb;
 			}
 		}
 
