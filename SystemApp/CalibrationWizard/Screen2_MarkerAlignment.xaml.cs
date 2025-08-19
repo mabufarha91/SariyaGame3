@@ -198,7 +198,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					StatusText.Foreground = Brushes.Orange;
 					return;
 				}
-				StatusText.Text = "Camera frame acquired.";
+				AppendStatus("Camera frame acquired.");
 
 				int detected = 0;
 				using (var bgra = BitmapSourceConverter.ToMat(src))
@@ -208,7 +208,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				using (var gray = new Mat())
 				{
 					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; return; }
-					StatusText.Text = "Image converted for processing.";
+					AppendStatus("Image converted for processing.");
 					Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
 					// For display: HSV mask
 					Cv2.CvtColor(bgr, hsv, ColorConversionCodes.BGR2HSV);
@@ -219,12 +219,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						new Scalar(hueMin, satMin, valMin),
 						new Scalar(179, 255, 255),
 						bw);
-					StatusText.Text = "Image processed successfully.";
+					AppendStatus($"HSV mask ready (hue>={hueMin}, sat>={satMin}, val>={valMin}).");
 					// Robust detection: operate on grayscale, not the HSV mask
 					Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
 					Cv2.GaussianBlur(gray, gray, new OpenCvSharp.Size(3, 3), 0);
 					Cv2.EqualizeHist(gray, gray);
-					detected = DetectArucoOnImage(gray);
+					SaveDiagnostics(bgr, gray, bw);
+					detected = DetectArucoOnImageWithLogging(gray, bw);
 				}
 
 				markersDetected = detected >= 4;
@@ -256,17 +257,43 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
-		private int DetectArucoOnImage(Mat imageSingleChannel)
+		private void AppendStatus(string message)
 		{
-			// Pass 1: 7x7, tuned defaults
+			try
+			{
+				StatusText.Text += "\n" + message;
+			}
+			catch { }
+		}
+
+		private void SaveDiagnostics(Mat bgr, Mat gray, Mat bw)
+		{
+			try
+			{
+				string baseDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Diagnostics");
+				if (!Directory.Exists(baseDir)) Directory.CreateDirectory(baseDir);
+				string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+				Cv2.ImWrite(System.IO.Path.Combine(baseDir, $"color_{ts}.png"), bgr);
+				Cv2.ImWrite(System.IO.Path.Combine(baseDir, $"gray_{ts}.png"), gray);
+				Cv2.ImWrite(System.IO.Path.Combine(baseDir, $"hsvmask_{ts}.png"), bw);
+				AppendStatus($"Saved diagnostics to Diagnostics (timestamp {ts}).");
+			}
+			catch { }
+		}
+
+		private int DetectArucoOnImageWithLogging(Mat imageSingleChannel, Mat hsvMask)
+		{
+			AppendStatus("Pass 1: 7x7 default params on grayscale...");
 			if (TryDetect(imageSingleChannel, PredefinedDictionaryName.Dict7X7_250, out var firstCorners))
 			{
+				AppendStatus("Pass 1 success.");
 				return AddDetections(firstCorners);
 			}
 
-			// Pass 2: 7x7, stronger thresholds and smaller perimeter rate
+			AppendStatus("Pass 2: 7x7 stronger thresholds...");
 			if (TryDetect(imageSingleChannel, PredefinedDictionaryName.Dict7X7_250, out var secondCorners, strong: true))
 			{
+				AppendStatus("Pass 2 success.");
 				return AddDetections(secondCorners);
 			}
 
@@ -274,18 +301,33 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			using (var inverted = new Mat())
 			{
 				Cv2.BitwiseNot(imageSingleChannel, inverted);
+				AppendStatus("Pass 3: 7x7 on inverted grayscale...");
 				if (TryDetect(inverted, PredefinedDictionaryName.Dict7X7_250, out var invCorners, strong: true))
 				{
+					AppendStatus("Pass 3 success.");
 					return AddDetections(invCorners);
 				}
 			}
 
-			// Pass 4: fallback to 6x6 in case projected assets are 6x6
+			AppendStatus("Pass 4: fallback 6x6 with stronger thresholds...");
 			if (TryDetect(imageSingleChannel, PredefinedDictionaryName.Dict6X6_250, out var sixCorners, strong: true))
 			{
+				AppendStatus("Pass 4 success.");
 				return AddDetections(sixCorners);
 			}
 
+			// Pass 5: last resort on HSV mask (if any)
+			if (hsvMask != null && !hsvMask.Empty())
+			{
+				AppendStatus("Pass 5: 7x7 on HSV mask...");
+				if (TryDetect(hsvMask, PredefinedDictionaryName.Dict7X7_250, out var hsvCorners, strong: true))
+				{
+					AppendStatus("Pass 5 success.");
+					return AddDetections(hsvCorners);
+				}
+			}
+
+			AppendStatus("No markers detected in all passes.");
 			return 0;
 		}
 
