@@ -255,7 +255,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict6X6_250);
 			Point2f[][] corners;
 			int[] ids;
-			var parameters = DetectorParameters.Create();
+			var parameters = new DetectorParameters();
 			CvAruco.DetectMarkers(bw, dict, out corners, out ids, parameters, out _);
 			int found = 0;
 			if (corners != null)
@@ -364,10 +364,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private BitmapSource GenerateArucoMarkerBitmap(int id, int size)
 		{
 			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict6X6_250);
-			using (var marker = new Mat())
+			using (var marker = CvAruco.GenerateImageMarker(dict, id, size, 1))
 			using (var bgra = new Mat())
 			{
-				CvAruco.DrawMarker(dict, id, size, marker, 1);
 				Cv2.CvtColor(marker, bgra, ColorConversionCodes.GRAY2BGRA);
 				var wb = bgra.ToWriteableBitmap();
 				wb.Freeze();
