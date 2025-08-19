@@ -205,10 +205,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				using (var bgr = new Mat())
 				using (var hsv = new Mat())
 				using (var bw = new Mat())
+				using (var gray = new Mat())
 				{
 					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; return; }
 					StatusText.Text = "Image converted for processing.";
 					Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
+					// For display: HSV mask
 					Cv2.CvtColor(bgr, hsv, ColorConversionCodes.BGR2HSV);
 					int hueMin = HueSlider != null ? (int)HueSlider.Value : _hueMin;
 					int satMin = SaturationSlider != null ? (int)SaturationSlider.Value : _satMin;
@@ -218,7 +220,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						new Scalar(179, 255, 255),
 						bw);
 					StatusText.Text = "Image processed successfully.";
-					detected = DetectArucoOnBinary(bw);
+					// Robust detection: operate on grayscale, not the HSV mask
+					Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
+					Cv2.GaussianBlur(gray, gray, new OpenCvSharp.Size(3, 3), 0);
+					Cv2.EqualizeHist(gray, gray);
+					detected = DetectArucoOnImage(gray);
 				}
 
 				markersDetected = detected >= 4;
@@ -250,30 +256,84 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
-		private int DetectArucoOnBinary(Mat bw)
+		private int DetectArucoOnImage(Mat imageSingleChannel)
 		{
-			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict7X7_250);
-			Point2f[][] corners;
+			// Pass 1: 7x7, tuned defaults
+			if (TryDetect(imageSingleChannel, PredefinedDictionaryName.Dict7X7_250, out var firstCorners))
+			{
+				return AddDetections(firstCorners);
+			}
+
+			// Pass 2: 7x7, stronger thresholds and smaller perimeter rate
+			if (TryDetect(imageSingleChannel, PredefinedDictionaryName.Dict7X7_250, out var secondCorners, strong: true))
+			{
+				return AddDetections(secondCorners);
+			}
+
+			// Pass 3: inverted image
+			using (var inverted = new Mat())
+			{
+				Cv2.BitwiseNot(imageSingleChannel, inverted);
+				if (TryDetect(inverted, PredefinedDictionaryName.Dict7X7_250, out var invCorners, strong: true))
+				{
+					return AddDetections(invCorners);
+				}
+			}
+
+			// Pass 4: fallback to 6x6 in case projected assets are 6x6
+			if (TryDetect(imageSingleChannel, PredefinedDictionaryName.Dict6X6_250, out var sixCorners, strong: true))
+			{
+				return AddDetections(sixCorners);
+			}
+
+			return 0;
+		}
+
+		private bool TryDetect(Mat gray, PredefinedDictionaryName dictName, out Point2f[][] corners, bool strong = false)
+		{
+			var dict = CvAruco.GetPredefinedDictionary(dictName);
 			int[] ids;
 			var parameters = new DetectorParameters();
-			// Fine-tune parameters for projector lighting
 			parameters.CornerRefinementMethod = CornerRefineMethod.Subpix;
-			parameters.AdaptiveThreshWinSizeMin = 5;
-			parameters.AdaptiveThreshWinSizeMax = 25;
-			parameters.AdaptiveThreshWinSizeStep = 5;
-			parameters.MinMarkerPerimeterRate = 0.02;
-			CvAruco.DetectMarkers(bw, dict, out corners, out ids, parameters, out _);
+			parameters.CornerRefinementWinSize = 7;
+			parameters.CornerRefinementMaxIterations = 50;
+			parameters.CornerRefinementMinAccuracy = 0.01;
+			parameters.AdaptiveThreshWinSizeMin = strong ? 3 : 5;
+			parameters.AdaptiveThreshWinSizeMax = strong ? 35 : 25;
+			parameters.AdaptiveThreshWinSizeStep = strong ? 2 : 5;
+			parameters.AdaptiveThreshConstant = strong ? 5 : 7;
+			parameters.MinMarkerPerimeterRate = strong ? 0.01 : 0.02;
+			parameters.MaxMarkerPerimeterRate = 4.0;
+			parameters.MaxErroneousBitsInBorderRate = strong ? 0.5 : 0.35;
+			parameters.MinCornerDistanceRate = 0.02;
+			parameters.PerspectiveRemoveIgnoredMarginPerCell = 0.13;
+			parameters.MarkerBorderBits = 1;
+			parameters.MinDistanceToBorder = 1;
+			parameters.MinOtsuStdDev = 5.0;
+			try { parameters.DetectInvertedMarker = true; } catch { }
+			CvAruco.DetectMarkers(gray, dict, out corners, out ids, parameters, out _);
+			return corners != null && corners.Length > 0;
+		}
+
+		private int AddDetections(Point2f[][] corners)
+		{
 			int found = 0;
-			if (corners != null)
+			for (int i = 0; i < corners.Length; i++)
 			{
-				for (int i = 0; i < corners.Length; i++)
+				var quad = corners[i];
+				if (quad != null && quad.Length >= 4)
 				{
-					var quad = corners[i];
-					if (quad != null && quad.Length >= 4)
+					AddMarkerFromQuad(quad);
+					// Outline the detected marker for visual confirmation
+					var pts = quad.Select(p => new System.Windows.Point(p.X, p.Y)).ToArray();
+					for (int e = 0; e < 4; e++)
 					{
-						AddMarkerFromQuad(quad);
-						found++;
+						var a = ColorToCanvas(new System.Windows.Point(pts[e].X, pts[e].Y));
+						var b = ColorToCanvas(new System.Windows.Point(pts[(e + 1) % 4].X, pts[(e + 1) % 4].Y));
+						var line = new System.Windows.Shapes.Line { X1 = a.X, Y1 = a.Y, X2 = b.X, Y2 = b.Y, StrokeThickness = 2, Stroke = Brushes.Lime }; 
+						MarkersOverlay.Children.Add(line);
 					}
+					found++;
 				}
 			}
 			return found;
