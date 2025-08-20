@@ -235,6 +235,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					Cv2.EqualizeHist(gray, gray);
 					SaveDiagnostics(bgr, gray, bw);
 					detected = DetectArucoOnImageWithLogging(gray, bw);
+					if (detected == 0)
+					{
+						AppendStatus("Extra pass: detection on raw color...");
+						if (TryDetect(bgr, PredefinedDictionaryName.Dict7X7_250, out var colorCorners, strong: true))
+						{
+							detected = AddDetections(colorCorners);
+							AppendStatus("Extra pass success on color.");
+						}
+					}
 				}
 
 				markersDetected = detected >= 4;
@@ -277,17 +286,38 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private void SaveDiagnostics(Mat bgr, Mat gray, Mat bw)
 		{
+			string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+			var destinations = new List<string>();
 			try
 			{
-				string baseDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics");
-				if (!Directory.Exists(baseDir)) Directory.CreateDirectory(baseDir);
-				string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-				Cv2.ImWrite(System.IO.Path.Combine(baseDir, $"color_{ts}.png"), bgr);
-				Cv2.ImWrite(System.IO.Path.Combine(baseDir, $"gray_{ts}.png"), gray);
-				Cv2.ImWrite(System.IO.Path.Combine(baseDir, $"hsvmask_{ts}.png"), bw);
-				AppendStatus($"Saved diagnostics to {baseDir} (timestamp {ts}).");
+				string picsDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics");
+				if (!Directory.Exists(picsDir)) Directory.CreateDirectory(picsDir);
+				Cv2.ImWrite(System.IO.Path.Combine(picsDir, $"color_{ts}.png"), bgr);
+				Cv2.ImWrite(System.IO.Path.Combine(picsDir, $"gray_{ts}.png"), gray);
+				Cv2.ImWrite(System.IO.Path.Combine(picsDir, $"hsvmask_{ts}.png"), bw);
+				destinations.Add(picsDir);
 			}
-			catch { }
+			catch (Exception ex)
+			{
+				AppendStatus($"Diagnostics save to Pictures failed: {ex.Message}");
+			}
+			try
+			{
+				string appDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Diagnostics");
+				if (!Directory.Exists(appDir)) Directory.CreateDirectory(appDir);
+				Cv2.ImWrite(System.IO.Path.Combine(appDir, $"color_{ts}.png"), bgr);
+				Cv2.ImWrite(System.IO.Path.Combine(appDir, $"gray_{ts}.png"), gray);
+				Cv2.ImWrite(System.IO.Path.Combine(appDir, $"hsvmask_{ts}.png"), bw);
+				destinations.Add(appDir);
+			}
+			catch (Exception ex)
+			{
+				AppendStatus($"Diagnostics save to App folder failed: {ex.Message}");
+			}
+			if (destinations.Count > 0)
+			{
+				AppendStatus("Saved diagnostics to:" + string.Join(", ", destinations));
+			}
 		}
 
 		private int DetectArucoOnImageWithLogging(Mat imageSingleChannel, Mat hsvMask)
