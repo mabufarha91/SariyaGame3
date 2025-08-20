@@ -2,6 +2,18 @@
 
 A professional Windows Presentation Foundation (WPF) application for calibrating Kinect v2 sensors for interactive wall applications.
 
+## Quick Start (TL;DR)
+
+- Build: run `build_wpf.bat` in `SariyaGame3/SystemApp` (restores NuGet automatically if needed)
+- Run: `bin/Debug/KinectCalibrationWPF.exe`
+- Screen 2 markers: place four PNGs in the app folder:
+  - Debug: `bin/Debug/Markers/aruco_7x7_250_id0.png` … `aruco_7x7_250_id3.png`
+  - Release: `bin/Release/Markers/aruco_7x7_250_id0.png` … `aruco_7x7_250_id3.png`
+- Make them BIG using `QrSizeSlider` on Screen 2
+- Click “Find Markers”; check Status text and diagnostics
+- Diagnostics (after clicking Find):
+  - `%USERPROFILE%/Pictures/KinectCalibrationDiagnostics/` and `bin/Debug/Diagnostics/`
+
 ## 🎯 **Why WPF Instead of Unity?**
 
 We migrated from Unity to WPF for several strategic reasons:
@@ -33,9 +45,20 @@ We migrated from Unity to WPF for several strategic reasons:
 - **Automatic Plane Calculation**: Points automatically recalculate when moved
 - **Professional UI**: Modern Material Design-inspired interface
 
+### **Implemented (Screen 2 & 3 — Sensor Alignment)**
+- Live color feed (unprocessed) in `CameraFeedImage`
+- Real-time HSV mask for visualization in `FilteredCameraFeedImage`
+- Projected ArUco markers (7x7_250) on the secondary display via `ProjectorWindow`
+- Multi-pass ArUco detection (robust under projector lighting):
+  - Grayscale 7x7 with tuned defaults
+  - Grayscale 7x7 with stronger thresholds
+  - Inverted grayscale 7x7
+  - Fallback 6x6 (strong) if assets are 6x6
+  - Last-resort on HSV mask
+- Visual overlays: red centers + lime outlines for detected quads
+- Diagnostics saved for troubleshooting (color/gray/HSV-mask snapshots)
+
 ### **🔄 Planned Features**
-- **Screen 2**: Define Interactive Area (4 corner points)
-- **Screen 3**: Sensor Alignment (marker detection)
 - **Screen 4**: Touch Detection Test & Tuning
 - **3D Coordinate Mapping**: Convert 2D screen points to 3D world coordinates
 - **Calibration Data Persistence**: Save/load calibration settings
@@ -65,6 +88,16 @@ We migrated from Unity to WPF for several strategic reasons:
 - Professional UI with camera feed and control panel
 - Real-time status updates and button state management
 
+#### **Screen 2: Sensor Alignment** (`CalibrationWizard/Screen2_MarkerAlignment.xaml[.cs]`)
+- `CameraFeedImage`: always shows color feed
+- `FilteredCameraFeedImage`: shows HSV mask in black & white
+- `FindMarkersButton_Click`:
+  - Gets a fresh frame from `KinectManager`
+  - Builds HSV mask (for display), prepares grayscale (for detection)
+  - Runs multi-pass ArUco detection
+  - Draws overlays and updates status/logs
+- `ProjectorWindow`: displays 4 markers (IDs 0–3), scaled by `QrSizeSlider`
+
 #### **4. CalibrationPoint Model** (`Models/CalibrationPoint.cs`)
 - Data model for calibration points
 - Tracks position, index, and dragging state
@@ -90,11 +123,17 @@ We migrated from Unity to WPF for several strategic reasons:
 
 ### **Building the Application**
 
-1. **Clone or download the project**
-2. **Open in Visual Studio**
-3. **Restore NuGet packages** (if any)
-4. **Build the solution** (Ctrl+Shift+B)
-5. **Run the application** (F5)
+Option A (recommended):
+
+1. Open PowerShell in `SariyaGame3/SystemApp`
+2. Run `./build_wpf.bat`
+
+Option B (Visual Studio):
+
+1. Open `KinectCalibrationWPF.csproj`
+2. Restore NuGet packages
+3. Build (Debug | x64)
+4. Run
 
 ### **Running Without Kinect**
 
@@ -104,6 +143,30 @@ The application includes a test mode that works without Kinect hardware:
 - Perfect for development and testing
 
 ### **Using Screen 1**
+### **Using Screen 2 (Sensor Alignment)**
+
+1. Ensure the projector is configured as a second display
+2. Place marker PNGs in the app folder:
+   - Debug: `bin/Debug/Markers/aruco_7x7_250_id0.png` … `id3.png`
+   - Release: `bin/Release/Markers/aruco_7x7_250_id0.png` … `id3.png`
+3. Start the Calibration Wizard → Screen 2
+4. Use `QrSizeSlider` to make markers large and clearly visible
+5. Adjust HSV sliders to visualize the mask (detection uses grayscale)
+6. Click “Find Markers”; watch Status text for the detection passes
+7. If found, red dots appear at centers; lime outlines draw the quads
+
+Notes:
+- If Status shows a WARNING about placeholders, your projector is not using real ArUco PNGs
+- Marker dictionary: `DICT_7X7_250` (IDs 0,1,2,3)
+- Increase marker size and reduce motion blur for best results
+
+### **Diagnostics and Logs**
+
+- On each “Find Markers” click, the app logs detection passes and saves frames to:
+  - `%USERPROFILE%/Pictures/KinectCalibrationDiagnostics/`
+  - `bin/Debug/Diagnostics/` (or `bin/Release/Diagnostics/`)
+- Files: `color_*.png`, `gray_*.png`, `hsvmask_*.png`
+- Status text shows exact save locations and which detection pass succeeded
 
 1. **Launch the application**
 2. **Click "Start Calibration Wizard"**
@@ -182,8 +245,12 @@ KinectCalibrationWPF/
 ├── MainWindow.xaml                   # Main application window
 ├── MainWindow.xaml.cs                # Main window logic
 ├── CalibrationWizard/
-│   ├── CalibrationWizardWindow.xaml  # Screen 1 UI
-│   └── CalibrationWizardWindow.xaml.cs # Screen 1 logic
+│   ├── CalibrationWizardWindow.xaml        # Screen 1 UI
+│   ├── CalibrationWizardWindow.xaml.cs     # Screen 1 logic
+│   ├── Screen2_MarkerAlignment.xaml        # Screen 2 UI
+│   ├── Screen2_MarkerAlignment.xaml.cs     # Screen 2 logic (camera feeds + ArUco detection)
+│   ├── ProjectorWindow.xaml                # Secondary display for markers
+│   └── ProjectorWindow.xaml.cs             # Marker placement/scaling API
 ├── KinectManager/
 │   └── KinectManager.cs              # Kinect sensor management
 ├── UI/
@@ -223,7 +290,7 @@ For questions or issues with the WPF implementation, please refer to the project
 
 ---
 
-**Build Date**: 2025-08-13  
+**Build Date**: 2025-08-20  
 **Framework**: WPF (.NET Framework 4.8)  
-**Status**: Screen 1 Complete ✅  
-**Next**: Screen 2 Implementation 🔄
+**Status**: Screen 1, Screen 2/3 Alignment (robust ArUco) ✅  
+**Next**: Screen 4 Touch Test 🔄
