@@ -228,11 +228,17 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					{
 						System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[ERROR] Failed to save debug image: {ex.Message}" + Environment.NewLine);
 					}
+					// Automatic grayscale + Gaussian blur + Otsu threshold
+					if (_grayMat == null) _grayMat = new Mat();
+					Cv2.CvtColor(bgr, _grayMat, ColorConversionCodes.BGR2GRAY);
+					Cv2.GaussianBlur(_grayMat, _grayMat, new OpenCvSharp.Size(5, 5), 0);
+					if (_otsuMat == null) _otsuMat = new Mat();
+					Cv2.Threshold(_grayMat, _otsuMat, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);
 					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Creating ArUco dictionary: Dict4X4_50" + Environment.NewLine);
-					var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50);
-					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Calling CvAruco.DetectMarkers on threshold image..." + Environment.NewLine);
+					var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict7X7_250);
+					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Calling CvAruco.DetectMarkers on Otsu image..." + Environment.NewLine);
 					Point2f[][] corners; int[] ids; var parameters = new DetectorParameters(); Point2f[][] rejected;
-					CvAruco.DetectMarkers(_thresholdMat ?? bgr, dict, out corners, out ids, parameters, out rejected);
+					CvAruco.DetectMarkers(_otsuMat ?? bgr, dict, out corners, out ids, parameters, out rejected);
 					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Detection call finished." + Environment.NewLine);
 					_detectedCorners = corners; _detectedIds = ids;
 					detected = (ids != null) ? ids.Length : 0;
