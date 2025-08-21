@@ -33,6 +33,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private bool _usingRealMarkers = false;
 		private const int QrBaseSize = 300;
 		private Mat _grayMat;
+		private Mat _otsuMat;
 		private Mat _thresholdMat;
 		private Point2f[][] _detectedCorners;
 		private int[] _detectedIds;
@@ -61,28 +62,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				var src = kinectManager != null ? kinectManager.GetColorBitmap() : null;
 				if (src != null)
 				{
-					// Show the unprocessed color feed only; exposure is controlled by hardware
+					// Show the unprocessed color feed only
 					CameraFeed.Source = src;
-
-					// Build grayscale and adaptive threshold preview
-					using (var bgra = BitmapSourceConverter.ToMat(src))
-					using (var bgr = new Mat())
-					{
-						if (!bgra.Empty())
-						{
-							Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
-							if (_grayMat == null) _grayMat = new Mat();
-							Cv2.CvtColor(bgr, _grayMat, ColorConversionCodes.BGR2GRAY);
-							if (_thresholdMat == null) _thresholdMat = new Mat();
-							int blockSize = ThresholdSlider != null ? (int)ThresholdSlider.Value : 15;
-							if (blockSize % 2 == 0) blockSize++;
-							if (blockSize <= 1) blockSize = 3;
-							Cv2.AdaptiveThreshold(_grayMat, _thresholdMat, 255, AdaptiveThresholdTypes.GaussianC, ThresholdTypes.Binary, blockSize, 2);
-							var prev = BitmapSourceConverter.ToBitmapSource(_thresholdMat);
-							prev.Freeze();
-							FilteredPreview.Source = prev;
-						}
-					}
 				}
 			}
 			catch { }
