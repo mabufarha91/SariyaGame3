@@ -206,38 +206,52 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				int detected = 0;
 				using (var bgra = BitmapSourceConverter.ToMat(src))
 				using (var bgr = new Mat())
-				using (var annotated = new Mat())
 				{
-					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; return; }
-					AppendStatus("Image converted for processing.");
+					System.Diagnostics.Debug.WriteLine("--- FindMarkers_Click Initiated ---");
+					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; System.Diagnostics.Debug.WriteLine("[ERROR] Converted BGRA mat is empty."); return; }
 					Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
+					System.Diagnostics.Debug.WriteLine($"[INFO] _sourceMat is valid. Size: {bgr.Width}x{bgr.Height}, Channels: {bgr.Channels()}");
+					try
+					{
+						string folder = @"C:\\Temp";
+						try { if (!Directory.Exists(folder)) Directory.CreateDirectory(folder); } catch {}
+						string debugImagePath = System.IO.Path.Combine(folder, "KinectDebugFrame.png");
+						Cv2.ImWrite(debugImagePath, bgr);
+						System.Diagnostics.Debug.WriteLine($"[SUCCESS] Saved current frame for debugging at: {debugImagePath}");
+					}
+					catch (Exception ex)
+					{
+						System.Diagnostics.Debug.WriteLine($"[ERROR] Failed to save debug image: {ex.Message}");
+					}
+					System.Diagnostics.Debug.WriteLine("[INFO] Creating ArUco dictionary: Dict4X4_50");
 					var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50);
-					Point2f[][] corners; int[] ids; var parameters = new DetectorParameters();
-					CvAruco.DetectMarkers(bgr, dict, out corners, out ids, parameters, out _);
+					System.Diagnostics.Debug.WriteLine("[INFO] Calling CvAruco.DetectMarkers...");
+					Point2f[][] corners; int[] ids;
+					CvAruco.DetectMarkers(bgr, dict, out corners, out ids);
+					System.Diagnostics.Debug.WriteLine("[INFO] Detection call finished.");
 					_detectedCorners = corners; _detectedIds = ids;
 					detected = (ids != null) ? ids.Length : 0;
-					if (detected >= 1)
+					if (detected > 0)
 					{
-						bgr.CopyTo(annotated);
-						for (int i = 0; i < corners.Length; i++)
+						System.Diagnostics.Debug.WriteLine($"[SUCCESS] Found {ids.Length} markers!");
+						for (int i = 0; i < ids.Length; i++)
 						{
-							if (corners[i] == null || corners[i].Length < 4) continue;
-							var tl = corners[i][0];
-							Cv2.Circle(annotated, (OpenCvSharp.Point)tl, 8, new Scalar(0, 0, 255), thickness: -1);
+							var tl = corners[i] != null && corners[i].Length > 0 ? corners[i][0].ToString() : "<null>";
+							System.Diagnostics.Debug.WriteLine($"  - Marker ID: {ids[i]} found at corner[0]: {tl}");
 						}
-						using (var annotatedBgra = new Mat())
+						using (var imageWithMarkers = bgr.Clone())
 						{
-							Cv2.CvtColor(annotated, annotatedBgra, ColorConversionCodes.BGR2BGRA);
-							var bmp = BitmapSourceConverter.ToBitmapSource(annotatedBgra);
+							CvAruco.DrawDetectedMarkers(imageWithMarkers, corners, ids);
+							var bmp = BitmapSourceConverter.ToBitmapSource(imageWithMarkers);
 							bmp.Freeze();
 							CameraFeed.Source = bmp;
 						}
-						AppendStatus($"Detected {detected} markers (4x4_50) and drew TL dots.");
 					}
 					else
 					{
-						AppendStatus("No markers detected with 4x4_50.");
+						System.Diagnostics.Debug.WriteLine("[FAILURE] No markers were found in the image.");
 					}
+					System.Diagnostics.Debug.WriteLine("--- FindMarkers_Click Finished ---");
 				}
 
 				markersDetected = detected >= 4;
