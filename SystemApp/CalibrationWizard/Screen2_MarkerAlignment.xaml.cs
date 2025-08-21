@@ -32,6 +32,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private BitmapSource qrBitmapSource;
 		private bool _usingRealMarkers = false;
 		private const int QrBaseSize = 300;
+		private Mat _grayMat;
+		private Mat _thresholdMat;
 		private Point2f[][] _detectedCorners;
 		private int[] _detectedIds;
 		private double _currentContrast = 1.2;
@@ -61,6 +63,26 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				{
 					// Show the unprocessed color feed only; exposure is controlled by hardware
 					CameraFeed.Source = src;
+
+					// Build grayscale and adaptive threshold preview
+					using (var bgra = BitmapSourceConverter.ToMat(src))
+					using (var bgr = new Mat())
+					{
+						if (!bgra.Empty())
+						{
+							Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
+							if (_grayMat == null) _grayMat = new Mat();
+							Cv2.CvtColor(bgr, _grayMat, ColorConversionCodes.BGR2GRAY);
+							if (_thresholdMat == null) _thresholdMat = new Mat();
+							int blockSize = ThresholdSlider != null ? (int)ThresholdSlider.Value : 15;
+							if (blockSize % 2 == 0) blockSize++;
+							if (blockSize <= 1) blockSize = 3;
+							Cv2.AdaptiveThreshold(_grayMat, _thresholdMat, 255, AdaptiveThresholdTypes.GaussianC, ThresholdTypes.Binary, blockSize, 2);
+							var prev = BitmapSourceConverter.ToBitmapSource(_thresholdMat);
+							prev.Freeze();
+							FilteredPreview.Source = prev;
+						}
+					}
 				}
 			}
 			catch { }
@@ -212,7 +234,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "--- FindMarkers_Click Initiated ---" + Environment.NewLine);
 					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[ERROR] Converted BGRA mat is empty." + Environment.NewLine); return; }
 					Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
-					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[INFO] _sourceMat is valid. Size: {bgr.Width}x{bgr.Height}, Channels: {bgr.Channels()}" + Environment.NewLine);
+					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[INFO] Frame valid. Size: {bgr.Width}x{bgr.Height}, Channels: {bgr.Channels()}" + Environment.NewLine);
 					try
 					{
 						string folder = @"C:\\Temp";
@@ -227,9 +249,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					}
 					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Creating ArUco dictionary: Dict4X4_50" + Environment.NewLine);
 					var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50);
-					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Calling CvAruco.DetectMarkers..." + Environment.NewLine);
+					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Calling CvAruco.DetectMarkers on threshold image..." + Environment.NewLine);
 					Point2f[][] corners; int[] ids; var parameters = new DetectorParameters(); Point2f[][] rejected;
-					CvAruco.DetectMarkers(bgr, dict, out corners, out ids, parameters, out rejected);
+					CvAruco.DetectMarkers(_thresholdMat ?? bgr, dict, out corners, out ids, parameters, out rejected);
 					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Detection call finished." + Environment.NewLine);
 					_detectedCorners = corners; _detectedIds = ids;
 					detected = (ids != null) ? ids.Length : 0;
