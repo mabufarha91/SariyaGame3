@@ -11,6 +11,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private ScaleTransform[] scales;
 		private double[] baseWidths;
 		private double[] baseHeights;
+		private int selectedIndex = -1;
 
 		public ProjectorWindow()
 		{
@@ -56,6 +57,35 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			if (index < 0 || index >= markers.Length) return;
 			markers[index].Source = source;
+		}
+
+		public Point GetMarkerCenter(int index)
+		{
+			if (index < 0 || index >= markers.Length) return new Point(double.NaN, double.NaN);
+			double x = Canvas.GetLeft(markers[index]);
+			double y = Canvas.GetTop(markers[index]);
+			double w = markers[index].ActualWidth > 0 ? markers[index].ActualWidth : markers[index].Width;
+			double h = markers[index].ActualHeight > 0 ? markers[index].ActualHeight : markers[index].Height;
+			return new Point(x + w / 2.0, y + h / 2.0);
+		}
+
+		public void HighlightMarker(int index)
+		{
+			for (int i = 0; i < markers.Length; i++)
+			{
+				markers[i].Opacity = (i == index) ? 0.7 : 1.0;
+			}
+			selectedIndex = index;
+		}
+
+		public void NudgeSelected(double dx, double dy)
+		{
+			if (selectedIndex < 0 || selectedIndex >= markers.Length) return;
+			var img = markers[selectedIndex];
+			double x = Canvas.GetLeft(img);
+			double y = Canvas.GetTop(img);
+			Canvas.SetLeft(img, x + dx);
+			Canvas.SetTop(img, y + dy);
 		}
 	}
 }

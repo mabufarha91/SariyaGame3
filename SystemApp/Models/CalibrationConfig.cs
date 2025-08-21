@@ -31,6 +31,18 @@ namespace KinectCalibrationWPF.Models
 		public double DetectionExposure { get; set; } // 0..1
 		[DataMember]
 		public List<Point> DetectedMarkerCentersColor { get; set; } // detected centers in color-space pixels
+		[DataMember]
+		public int HsvHueMin { get; set; }
+		[DataMember]
+		public int HsvSatMin { get; set; }
+		[DataMember]
+		public int HsvValMin { get; set; }
+		[DataMember]
+		public List<Point> ProjectorMarkerCenters { get; set; } // projector centers for 4 markers
+		[DataMember]
+		public List<Point> CameraMarkerCornersTL { get; set; } // top-left corners sorted by ID
+		[DataMember]
+		public double[,] PerspectiveTransform3x3 { get; set; } // 3x3 row-major
 
 		public CalibrationConfig()
 		{
@@ -44,6 +56,17 @@ namespace KinectCalibrationWPF.Models
 			DetectedMarkerCentersColor = new List<Point>();
 			ProjectorMarkerScale = 1.0;
 			DetectionExposure = 0.5;
+			HsvHueMin = 0;
+			HsvSatMin = 0;
+			HsvValMin = 200;
+			ProjectorMarkerCenters = new List<Point>();
+			CameraMarkerCornersTL = new List<Point>();
+			PerspectiveTransform3x3 = new double[3,3]
+			{
+				{1,0,0},
+				{0,1,0},
+				{0,0,1}
+			};
 		}
 
 		private static double[,] CreateIdentity4x4()
