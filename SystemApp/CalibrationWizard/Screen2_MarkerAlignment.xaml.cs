@@ -191,6 +191,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			lastDetectedCentersColor.Clear();
 			try
 			{
+				try { System.IO.Directory.CreateDirectory(@"C:\\Temp"); }
+				catch (Exception ex) { MessageBox.Show($"Could not create Temp directory at C:\\Temp. Please create it manually. Error: {ex.Message}"); return; }
 				StatusText.Text = "Starting marker detection...";
 				StatusText.Foreground = Brushes.SteelBlue;
 				// Get a fresh color frame and process it now; do not use the displayed image
@@ -207,37 +209,37 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				using (var bgra = BitmapSourceConverter.ToMat(src))
 				using (var bgr = new Mat())
 				{
-					System.Diagnostics.Debug.WriteLine("--- FindMarkers_Click Initiated ---");
-					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; System.Diagnostics.Debug.WriteLine("[ERROR] Converted BGRA mat is empty."); return; }
+					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "--- FindMarkers_Click Initiated ---" + Environment.NewLine);
+					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[ERROR] Converted BGRA mat is empty." + Environment.NewLine); return; }
 					Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
-					System.Diagnostics.Debug.WriteLine($"[INFO] _sourceMat is valid. Size: {bgr.Width}x{bgr.Height}, Channels: {bgr.Channels()}");
+					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[INFO] _sourceMat is valid. Size: {bgr.Width}x{bgr.Height}, Channels: {bgr.Channels()}" + Environment.NewLine);
 					try
 					{
 						string folder = @"C:\\Temp";
 						try { if (!Directory.Exists(folder)) Directory.CreateDirectory(folder); } catch {}
 						string debugImagePath = System.IO.Path.Combine(folder, "KinectDebugFrame.png");
 						Cv2.ImWrite(debugImagePath, bgr);
-						System.Diagnostics.Debug.WriteLine($"[SUCCESS] Saved current frame for debugging at: {debugImagePath}");
+						System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[SUCCESS] Saved current frame for debugging at: {debugImagePath}" + Environment.NewLine);
 					}
 					catch (Exception ex)
 					{
-						System.Diagnostics.Debug.WriteLine($"[ERROR] Failed to save debug image: {ex.Message}");
+						System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[ERROR] Failed to save debug image: {ex.Message}" + Environment.NewLine);
 					}
-					System.Diagnostics.Debug.WriteLine("[INFO] Creating ArUco dictionary: Dict4X4_50");
+					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Creating ArUco dictionary: Dict4X4_50" + Environment.NewLine);
 					var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50);
-					System.Diagnostics.Debug.WriteLine("[INFO] Calling CvAruco.DetectMarkers...");
-					Point2f[][] corners; int[] ids;
-					CvAruco.DetectMarkers(bgr, dict, out corners, out ids);
-					System.Diagnostics.Debug.WriteLine("[INFO] Detection call finished.");
+					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Calling CvAruco.DetectMarkers..." + Environment.NewLine);
+					Point2f[][] corners; int[] ids; var parameters = new DetectorParameters(); Point2f[][] rejected;
+					CvAruco.DetectMarkers(bgr, dict, out corners, out ids, parameters, out rejected);
+					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Detection call finished." + Environment.NewLine);
 					_detectedCorners = corners; _detectedIds = ids;
 					detected = (ids != null) ? ids.Length : 0;
 					if (detected > 0)
 					{
-						System.Diagnostics.Debug.WriteLine($"[SUCCESS] Found {ids.Length} markers!");
+						System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[SUCCESS] Found {ids.Length} markers!" + Environment.NewLine);
 						for (int i = 0; i < ids.Length; i++)
 						{
 							var tl = corners[i] != null && corners[i].Length > 0 ? corners[i][0].ToString() : "<null>";
-							System.Diagnostics.Debug.WriteLine($"  - Marker ID: {ids[i]} found at corner[0]: {tl}");
+							System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"  - Marker ID: {ids[i]} found at corner[0]: {tl}" + Environment.NewLine);
 						}
 						using (var imageWithMarkers = bgr.Clone())
 						{
@@ -249,9 +251,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					}
 					else
 					{
-						System.Diagnostics.Debug.WriteLine("[FAILURE] No markers were found in the image.");
+						System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[FAILURE] No markers were found in the image." + Environment.NewLine);
 					}
-					System.Diagnostics.Debug.WriteLine("--- FindMarkers_Click Finished ---");
+					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "--- FindMarkers_Click Finished ---" + Environment.NewLine);
 				}
 
 				markersDetected = detected >= 4;
