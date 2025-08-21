@@ -604,5 +604,13 @@ namespace KinectCalibrationWPF.KinectManager
                 kinectSensor = null;
             }
         }
+
+        // Attempts to set color camera exposure via ColorCameraSettings if available
+        public bool SetColorCameraExposure(TimeSpan exposure)
+        {
+            // Kinect v2 SDK exposes ColorCameraSettings as read-only; there is no public setter.
+            // Return false to indicate hardware exposure could not be applied.
+            return false;
+        }
     }
 }

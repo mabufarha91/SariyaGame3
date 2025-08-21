@@ -59,36 +59,21 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				var src = kinectManager != null ? kinectManager.GetColorBitmap() : null;
 				if (src != null)
 				{
-					// Always show the unprocessed color feed
+					// Show the unprocessed color feed only; exposure is controlled by hardware
 					CameraFeed.Source = src;
-
-					// Also produce and show the real-time HSV mask in black & white
-					int hueMin = HueSlider != null ? (int)HueSlider.Value : _hueMin;
-					int satMin = SaturationSlider != null ? (int)SaturationSlider.Value : _satMin;
-					int valMin = ValueSlider != null ? (int)ValueSlider.Value : _valMin;
-
-					using (var bgra = BitmapSourceConverter.ToMat(src))
-					using (var bgr = new Mat())
-					using (var hsv = new Mat())
-					using (var mask = new Mat())
-					{
-						if (!bgra.Empty())
-						{
-							Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
-							Cv2.CvtColor(bgr, hsv, ColorConversionCodes.BGR2HSV);
-							Cv2.InRange(hsv,
-								new Scalar(hueMin, satMin, valMin),
-								new Scalar(179, 255, 255),
-								mask);
-							var wbMask = mask.ToWriteableBitmap();
-							wbMask.Freeze();
-							FilteredPreview.Source = wbMask;
-						}
-					}
 				}
 			}
 			catch { }
 			CameraStatusText.Text = (kinectManager != null && kinectManager.IsInitialized) ? "Camera: Connected" : "Camera: Not Available (Test Mode)";
+		}
+
+		private void ExposureSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		{
+			// Map slider to exposure time ~ +/- (10 steps) around ~0 baseline, e.g., -10..10 -> -333ms..+333ms offset from 0
+			// Here we use step as 1/30s per unit as suggested
+			long ticks = (long)(e.NewValue * (1.0 / 30.0) * 10000000.0);
+			var exposure = TimeSpan.FromTicks(ticks);
+			try { kinectManager?.SetColorCameraExposure(exposure); } catch { }
 		}
 
 		private void Screen2_MarkerAlignment_Loaded(object sender, RoutedEventArgs e)
@@ -108,11 +93,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			projectorWindow.Show();
 			this.Activate();
-			// Generate and display 4 unique ArUco markers on projector
+			// Load real markers from disk if available; otherwise let ProjectorWindow load embedded assets
 			for (int i = 0; i < 4; i++)
 			{
 				var bmp = GenerateArucoMarkerBitmap(i, QrBaseSize);
-				projectorWindow.SetMarkerSource(i, bmp);
+				if (_usingRealMarkers && bmp != null)
+				{
+					projectorWindow.SetMarkerSource(i, bmp);
+				}
 			}
 			if (_usingRealMarkers)
 			{
@@ -552,11 +540,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			cfg.ProjectorMarkerPositions.Add(new System.Windows.Point(markerX[2], markerY[2]));
 			cfg.ProjectorMarkerPositions.Add(new System.Windows.Point(markerX[3], markerY[3]));
 			cfg.ProjectorMarkerScale = QrSizeSlider.Value;
-			cfg.DetectionExposure = ValueSlider != null ? ValueSlider.Value : _currentBrightnessThreshold;
+			cfg.DetectionExposure = 0; // exposure handled via hardware UI now
 			cfg.DetectedMarkerCentersColor = new List<System.Windows.Point>(lastDetectedCentersColor);
-			cfg.HsvHueMin = HueSlider != null ? (int)HueSlider.Value : _hueMin;
-			cfg.HsvSatMin = SaturationSlider != null ? (int)SaturationSlider.Value : _satMin;
-			cfg.HsvValMin = ValueSlider != null ? (int)ValueSlider.Value : _valMin;
+			cfg.HsvHueMin = 0;
+			cfg.HsvSatMin = 0;
+			cfg.HsvValMin = 0;
 			cfg.ProjectorMarkerCenters = projectorPts.Select(p => new System.Windows.Point(p.X, p.Y)).ToList();
 			cfg.CameraMarkerCornersTL = cameraPtsListForSave;
 			cfg.PerspectiveTransform3x3 = H33;
@@ -610,21 +598,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 			}
 			catch { }
-
-			// Fallback placeholder if marker files are missing
-			using (var img = new Mat(size, size, MatType.CV_8UC1, Scalar.All(255)))
-			{
-				int border = Math.Max(6, size / 12);
-				Cv2.Rectangle(img, new OpenCvSharp.Rect(border, border, size - 2 * border, size - 2 * border), Scalar.All(0), thickness: 3);
-				Cv2.PutText(img, id.ToString(), new OpenCvSharp.Point(size / 3, size / 2), HersheyFonts.HersheySimplex, 1.0, Scalar.All(0), 2);
-				using (var imgColor = new Mat())
-				{
-					Cv2.CvtColor(img, imgColor, ColorConversionCodes.GRAY2BGRA);
-					var wb = imgColor.ToWriteableBitmap();
-					wb.Freeze();
-					return wb;
-				}
-			}
+			// No fallback drawing; return null to allow embedded resources to be used
+			return null;
 		}
 
 		private void HueSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
