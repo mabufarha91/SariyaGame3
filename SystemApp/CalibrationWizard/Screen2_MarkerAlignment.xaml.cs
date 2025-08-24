@@ -13,6 +13,7 @@ using System.Windows.Media.Imaging;
 using KinectCalibrationWPF.Services;
 using KinectCalibrationWPF.Models;
 using System.Collections.Generic;
+using System.Diagnostics;
 using OpenCvSharp;
 using OpenCvSharp.WpfExtensions;
 using OpenCvSharp.Aruco;
@@ -190,108 +191,107 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private void FindMarkersButton_Click(object sender, RoutedEventArgs e)
 		{
-			MarkersOverlay.Children.Clear();
-			lastDetectedCentersColor.Clear();
-			try
+			string diagPath = @"C:\\Temp\\ArucoDebug";
+			try { Directory.CreateDirectory(diagPath); } catch { }
+			string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+			string logPath = System.IO.Path.Combine(diagPath, $"detection_log_{timestamp}.txt");
+
+			LogToFile(logPath, "--- Starting Enhanced Aruco Diagnostic ---");
+
+			// Acquire latest color frame as source mat
+			var src = kinectManager != null ? kinectManager.GetColorBitmap() : null;
+			if (src == null || src.PixelWidth <= 0 || src.PixelHeight <= 0)
 			{
-				try { System.IO.Directory.CreateDirectory(@"C:\\Temp"); }
-				catch (Exception ex) { MessageBox.Show($"Could not create Temp directory at C:\\Temp. Please create it manually. Error: {ex.Message}"); return; }
-				StatusText.Text = "Starting marker detection...";
-				StatusText.Foreground = Brushes.SteelBlue;
-				// Get a fresh color frame and process it now; do not use the displayed image
-				var src = kinectManager != null ? kinectManager.GetColorBitmap() : null;
-				if (src == null || src.PixelWidth <= 0 || src.PixelHeight <= 0)
-				{
-					StatusText.Text = "Status: Camera frame not ready, please try again";
-					StatusText.Foreground = Brushes.Orange;
-					return;
-				}
-				AppendStatus("Camera frame acquired.");
-
-				int detected = 0;
-				using (var bgra = BitmapSourceConverter.ToMat(src))
-				using (var bgr = new Mat())
-				{
-					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "--- FindMarkers_Click Initiated ---" + Environment.NewLine);
-					if (bgra.Empty()) { StatusText.Text = "Image conversion failed (empty image)."; StatusText.Foreground = Brushes.Orange; System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[ERROR] Converted BGRA mat is empty." + Environment.NewLine); return; }
-					Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
-					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[INFO] Frame valid. Size: {bgr.Width}x{bgr.Height}, Channels: {bgr.Channels()}" + Environment.NewLine);
-					try
-					{
-						string folder = @"C:\\Temp";
-						try { if (!Directory.Exists(folder)) Directory.CreateDirectory(folder); } catch {}
-						string debugImagePath = System.IO.Path.Combine(folder, "KinectDebugFrame.png");
-						Cv2.ImWrite(debugImagePath, bgr);
-						System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[SUCCESS] Saved current frame for debugging at: {debugImagePath}" + Environment.NewLine);
-					}
-					catch (Exception ex)
-					{
-						System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[ERROR] Failed to save debug image: {ex.Message}" + Environment.NewLine);
-					}
-					// Automatic grayscale + Gaussian blur + Otsu threshold
-					if (_grayMat == null) _grayMat = new Mat();
-					Cv2.CvtColor(bgr, _grayMat, ColorConversionCodes.BGR2GRAY);
-					Cv2.GaussianBlur(_grayMat, _grayMat, new OpenCvSharp.Size(5, 5), 0);
-					if (_otsuMat == null) _otsuMat = new Mat();
-					Cv2.Threshold(_grayMat, _otsuMat, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);
-					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Creating ArUco dictionary: Dict4X4_50" + Environment.NewLine);
-					var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict7X7_250);
-					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Calling CvAruco.DetectMarkers on Otsu image..." + Environment.NewLine);
-					Point2f[][] corners; int[] ids; var parameters = new DetectorParameters(); Point2f[][] rejected;
-					CvAruco.DetectMarkers(_otsuMat ?? bgr, dict, out corners, out ids, parameters, out rejected);
-					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[INFO] Detection call finished." + Environment.NewLine);
-					_detectedCorners = corners; _detectedIds = ids;
-					detected = (ids != null) ? ids.Length : 0;
-					if (detected > 0)
-					{
-						System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"[SUCCESS] Found {ids.Length} markers!" + Environment.NewLine);
-						for (int i = 0; i < ids.Length; i++)
-						{
-							var tl = corners[i] != null && corners[i].Length > 0 ? corners[i][0].ToString() : "<null>";
-							System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", $"  - Marker ID: {ids[i]} found at corner[0]: {tl}" + Environment.NewLine);
-						}
-						using (var imageWithMarkers = bgr.Clone())
-						{
-							CvAruco.DrawDetectedMarkers(imageWithMarkers, corners, ids);
-							var bmp = BitmapSourceConverter.ToBitmapSource(imageWithMarkers);
-							bmp.Freeze();
-							CameraFeed.Source = bmp;
-						}
-					}
-					else
-					{
-						System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "[FAILURE] No markers were found in the image." + Environment.NewLine);
-					}
-					System.IO.File.AppendAllText(@"C:\\Temp\\KinectDebugLog.txt", "--- FindMarkers_Click Finished ---" + Environment.NewLine);
-				}
-
-				markersDetected = detected >= 4;
-				CalibrateButton.IsEnabled = markersDetected;
-				if (detected == 0)
-				{
-					StatusText.Text = "No markers found. Adjust HSV and try again.";
-					StatusText.Foreground = Brushes.Orange;
-				}
-				else if (detected < 4)
-				{
-					StatusText.Text = $"Found {detected}/4 markers.";
-					StatusText.Foreground = Brushes.Orange;
-				}
-				else
-				{
-					StatusText.Text = "Success! 4 markers found.";
-					StatusText.Foreground = Brushes.Green;
-				}
-
-				// Reveal camera view again (if hidden) and show red dots only
-				CameraFeed.Visibility = Visibility.Visible;
-				HideCameraButton.Content = "Hide Camera View";
+				LogToFile(logPath, "[ERROR] Camera frame not ready.");
+				return;
 			}
-			catch
+
+			using (var bgra = BitmapSourceConverter.ToMat(src))
+			using (var color = new Mat())
 			{
-				StatusText.Text = "Status: Detection failed. Please adjust exposure and try again.";
-				StatusText.Foreground = Brushes.OrangeRed;
+				if (bgra.Empty()) { LogToFile(logPath, "[ERROR] BGRA mat empty."); return; }
+				Cv2.CvtColor(bgra, color, ColorConversionCodes.BGRA2BGR);
+				color.SaveImage(System.IO.Path.Combine(diagPath, $"00_Original_{timestamp}.png"));
+
+				// Build processed strategies
+				var processingStrategies = new Dictionary<string, Mat>();
+				using (var gray = new Mat())
+				{
+					Cv2.CvtColor(color, gray, ColorConversionCodes.BGR2GRAY);
+					processingStrategies.Add("01_Grayscale", gray.Clone());
+					using (var blurred = new Mat())
+					{
+						Cv2.GaussianBlur(gray, blurred, new OpenCvSharp.Size(5, 5), 0);
+						processingStrategies.Add("02_Grayscale_Blurred", blurred.Clone());
+					}
+					using (var flipped = new Mat())
+					{
+						Cv2.Flip(gray, flipped, FlipMode.Y);
+						processingStrategies.Add("03_Grayscale_Flipped", flipped.Clone());
+					}
+				}
+
+				foreach (var kv in processingStrategies)
+				{
+					kv.Value.SaveImage(System.IO.Path.Combine(diagPath, $"{kv.Key}_{timestamp}.png"));
+				}
+				LogToFile(logPath, $"Saved {processingStrategies.Count} processed image versions.");
+
+				bool anyFound = false;
+				foreach (var kv in processingStrategies)
+				{
+					LogToFile(logPath, $"\n--- Testing Strategy: {kv.Key} ---");
+					if (TryDetect(kv.Value, logPath, diagPath, timestamp, kv.Key, false)) anyFound = true;
+					if (TryDetect(kv.Value, logPath, diagPath, timestamp, kv.Key, true)) anyFound = true;
+				}
+
+				foreach (var kv in processingStrategies) { kv.Value.Dispose(); }
+
+				LogToFile(logPath, anyFound ? "\n--- DIAGNOSTIC COMPLETE: SUCCESS! At least one marker was found. ---" : "\n--- DIAGNOSTIC COMPLETE: FAILURE. No markers found in any configuration. ---");
+				try { Process.Start("explorer.exe", diagPath); } catch { }
 			}
+		}
+
+		private bool TryDetect(Mat imageToTest, string logPath, string diagPath, string timestamp, string strategyName, bool useAggressiveParams)
+		{
+			string paramType = useAggressiveParams ? "Aggressive" : "Default";
+			LogToFile(logPath, $"--> Attempting detection with {paramType} parameters...");
+
+			DetectorParameters parameters;
+			parameters = new DetectorParameters();
+			if (useAggressiveParams)
+			{
+				parameters.MinMarkerPerimeterRate = 0.01;
+				parameters.PolygonalApproxAccuracyRate = 0.08;
+				try { parameters.CornerRefinementMethod = CornerRefineMethod.Subpix; } catch { }
+			}
+
+			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict7X7_250);
+			Point2f[][] corners; int[] ids; Point2f[][] rejected;
+			CvAruco.DetectMarkers(imageToTest, dict, out corners, out ids, parameters, out rejected);
+
+			if (ids != null && ids.Length > 0)
+			{
+				LogToFile(logPath, $"    [SUCCESS] FOUND {ids.Length} MARKERS!");
+				using (var resultImage = imageToTest.Channels() == 1 ? imageToTest.CvtColor(ColorConversionCodes.GRAY2BGR) : imageToTest.Clone())
+				{
+					CvAruco.DrawDetectedMarkers(resultImage, corners, ids, Scalar.LimeGreen);
+					string successFileName = $"DETECTED_{strategyName}_{paramType}_{timestamp}.png";
+					resultImage.SaveImage(System.IO.Path.Combine(diagPath, successFileName));
+					LogToFile(logPath, $"    Saved successful detection image to {successFileName}");
+				}
+				return true;
+			}
+			else
+			{
+				LogToFile(logPath, "    [FAILURE] No markers found.");
+				return false;
+			}
+		}
+
+		private void LogToFile(string path, string message)
+		{
+			try { File.AppendAllText(path, message + Environment.NewLine); } catch { }
 		}
 
 		private void AppendStatus(string message)
