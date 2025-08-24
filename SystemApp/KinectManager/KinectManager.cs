@@ -336,6 +336,26 @@ namespace KinectCalibrationWPF.KinectManager
             }
         }
         
+        public bool TryGetColorFrameRaw(out byte[] bgraBytes, out int width, out int height, out int stride)
+        {
+            bgraBytes = null;
+            width = colorWidth;
+            height = colorHeight;
+            stride = (colorWidth > 0 ? colorWidth : 0) * 4;
+            if (!IsInitialized || kinectSensor == null || colorWidth <= 0 || colorHeight <= 0)
+                return false;
+            lock (colorDataLock)
+            {
+                if (latestColorData == null || latestColorData.Length == 0)
+                {
+                    return false;
+                }
+                bgraBytes = new byte[latestColorData.Length];
+                Array.Copy(latestColorData, bgraBytes, latestColorData.Length);
+                return true;
+            }
+        }
+
         public bool IsColorStreamActive()
         {
             return (DateTime.UtcNow - lastColorFrameTimeUtc).TotalSeconds < 1.0;

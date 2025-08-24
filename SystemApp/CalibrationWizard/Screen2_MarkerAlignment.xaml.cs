@@ -17,6 +17,7 @@ using System.Diagnostics;
 using OpenCvSharp;
 using OpenCvSharp.WpfExtensions;
 using OpenCvSharp.Aruco;
+using System.Runtime.InteropServices;
 
 namespace KinectCalibrationWPF.CalibrationWizard
 {
@@ -191,107 +192,321 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private void FindMarkersButton_Click(object sender, RoutedEventArgs e)
 		{
-			string diagPath = @"C:\\Temp\\ArucoDebug";
-			try { Directory.CreateDirectory(diagPath); } catch { }
-			string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-			string logPath = System.IO.Path.Combine(diagPath, $"detection_log_{timestamp}.txt");
-
-			LogToFile(logPath, "--- Starting Enhanced Aruco Diagnostic ---");
-
-			// Acquire latest color frame as source mat
-			var src = kinectManager != null ? kinectManager.GetColorBitmap() : null;
-			if (src == null || src.PixelWidth <= 0 || src.PixelHeight <= 0)
+			bool verbose = (EnableVerboseLogging != null && EnableVerboseLogging.IsChecked == true);
+			string baseDiag = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics");
+			string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+			string diagDir = System.IO.Path.Combine(baseDiag, ts);
+			string logPath = System.IO.Path.Combine(diagDir, "detection_log.txt");
+			if (verbose) { try { Directory.CreateDirectory(diagDir); } catch { } }
+			// Task 1: Acquire perfect, lossless image from WriteableBitmap/byte[]
+			if (kinectManager == null)
 			{
-				LogToFile(logPath, "[ERROR] Camera frame not ready.");
+				AppendStatus("Camera not initialized.");
+				if (verbose) LogToFile(logPath, "ERROR: Kinect manager null.");
 				return;
 			}
-
-			using (var bgra = BitmapSourceConverter.ToMat(src))
-			using (var color = new Mat())
+			byte[] bgra;
+			int w, h, stride;
+			if (!kinectManager.TryGetColorFrameRaw(out bgra, out w, out h, out stride) || bgra == null)
 			{
-				if (bgra.Empty()) { LogToFile(logPath, "[ERROR] BGRA mat empty."); return; }
-				Cv2.CvtColor(bgra, color, ColorConversionCodes.BGRA2BGR);
-				color.SaveImage(System.IO.Path.Combine(diagPath, $"00_Original_{timestamp}.png"));
-
-				// Build processed strategies
-				var processingStrategies = new Dictionary<string, Mat>();
-				using (var gray = new Mat())
+				AppendStatus("No color frame available.");
+				if (verbose) LogToFile(logPath, "ERROR: No color frame available.");
+				return;
+			}
+			var handle = GCHandle.Alloc(bgra, GCHandleType.Pinned);
+			try
+			{
+				using (var matBGRA = Mat.FromPixelData(h, w, MatType.CV_8UC4, handle.AddrOfPinnedObject(), stride))
+				using (var matBGR = new Mat())
 				{
-					Cv2.CvtColor(color, gray, ColorConversionCodes.BGR2GRAY);
-					processingStrategies.Add("01_Grayscale", gray.Clone());
-					using (var blurred = new Mat())
+					Cv2.CvtColor(matBGRA, matBGR, ColorConversionCodes.BGRA2BGR);
+					if (verbose)
 					{
-						Cv2.GaussianBlur(gray, blurred, new OpenCvSharp.Size(5, 5), 0);
-						processingStrategies.Add("02_Grayscale_Blurred", blurred.Clone());
+						try { Cv2.ImWrite(System.IO.Path.Combine(diagDir, "00_bgr.png"), matBGR); } catch { }
+						try { LogToFile(logPath, $"SRC: {w}x{h}, stride={stride}"); } catch { }
+						try { LogToFile(logPath, $"OpenCV: {Cv2.GetVersionString()}"); } catch { }
 					}
-					using (var flipped = new Mat())
+
+					// Task 2: Build processing strategies
+					var strategyImages = BuildProcessingStrategies(matBGR);
+					if (verbose)
 					{
-						Cv2.Flip(gray, flipped, FlipMode.Y);
-						processingStrategies.Add("03_Grayscale_Flipped", flipped.Clone());
+						foreach (var kv in strategyImages)
+						{
+							try { Cv2.ImWrite(System.IO.Path.Combine(diagDir, $"strategy_{kv.Key.Replace(' ', '_')}.png"), kv.Value); } catch { }
+						}
+					}
+
+					// Task 3: Detector parameter sets (default + aggressive)
+					var parameterSets = BuildDetectorParameterSets();
+
+					// Task 4: Multi-strategy detection loop
+					Point2f[][] bestCorners = null; int[] bestIds = null; string bestKey = null; string bestDictName = null; Point2f[][] bestRejected = null;
+					var dicts = BuildDictionaries();
+					foreach (var kv in strategyImages)
+					{
+						foreach (var p in parameterSets)
+						{
+							foreach (var dictName in dicts)
+							{
+								Point2f[][] corners; int[] ids; Point2f[][] rejected;
+								var dict = CvAruco.GetPredefinedDictionary(dictName);
+								var sw = verbose ? System.Diagnostics.Stopwatch.StartNew() : null;
+								CvAruco.DetectMarkers(kv.Value, dict, out corners, out ids, p, out rejected);
+								if (verbose && sw != null)
+								{
+									sw.Stop();
+									LogToFile(logPath, string.Format("Attempt: strategy={0}, dict={1}, params={2}, timeMs={3}, ids={4}", kv.Key, dictName, DescribeParams(p), sw.ElapsedMilliseconds, ids != null ? string.Join(",", ids) : "null"));
+								}
+								if (ids != null && ids.Length > 0)
+								{
+									Point2f[][] filteredCorners; int[] filteredIds;
+									FilterDetections(corners, ids, w, h, out filteredCorners, out filteredIds, dictName, verbose ? logPath : null);
+									if (filteredIds != null && filteredIds.Length > 0)
+									{
+										bestCorners = filteredCorners; bestIds = filteredIds; bestKey = kv.Key; bestDictName = dictName.ToString(); bestRejected = rejected; break;
+									}
+								}
+							}
+						}
+						if (bestIds != null) break;
+					}
+
+					foreach (var kv in strategyImages) kv.Value.Dispose();
+
+					if (bestIds != null && bestIds.Length > 0)
+					{
+						_detectedCorners = bestCorners;
+						_detectedIds = bestIds;
+						StatusText.Text = $"Status: Found {bestIds.Length}/4 expected marker(s) [{string.Join(",", bestIds)}] using {bestKey}, dict={bestDictName}";
+						StatusText.Foreground = Brushes.Green;
+						CalibrateButton.IsEnabled = HasAllMarkerIds(bestIds);
+						NextButton.IsEnabled = HasAllMarkerIds(bestIds);
+						// Draw overlay outlines
+						MarkersOverlay.Children.Clear();
+						AddDetections(bestCorners);
+						if (verbose)
+						{
+							try
+							{
+								using (var vis = matBGR.Clone())
+								{
+									CvAruco.DrawDetectedMarkers(vis, bestCorners, bestIds, Scalar.LimeGreen);
+									Cv2.ImWrite(System.IO.Path.Combine(diagDir, "zz_detected.png"), vis);
+								}
+							}
+							catch { }
+						}
+						// Mark if calibration-ready (IDs 0..3 present)
+						if (!HasAllMarkerIds(bestIds))
+						{
+							StatusText.Text += " (IDs 0..3 not all present)";
+						}
+					}
+					else
+					{
+						StatusText.Text = "Status: No markers found. Try adjusting projector/camera.";
+						StatusText.Foreground = Brushes.OrangeRed;
+						if (verbose) LogToFile(logPath, "RESULT: No markers found in any strategy.");
 					}
 				}
-
-				foreach (var kv in processingStrategies)
-				{
-					kv.Value.SaveImage(System.IO.Path.Combine(diagPath, $"{kv.Key}_{timestamp}.png"));
-				}
-				LogToFile(logPath, $"Saved {processingStrategies.Count} processed image versions.");
-
-				bool anyFound = false;
-				foreach (var kv in processingStrategies)
-				{
-					LogToFile(logPath, $"\n--- Testing Strategy: {kv.Key} ---");
-					if (TryDetect(kv.Value, logPath, diagPath, timestamp, kv.Key, false)) anyFound = true;
-					if (TryDetect(kv.Value, logPath, diagPath, timestamp, kv.Key, true)) anyFound = true;
-				}
-
-				foreach (var kv in processingStrategies) { kv.Value.Dispose(); }
-
-				LogToFile(logPath, anyFound ? "\n--- DIAGNOSTIC COMPLETE: SUCCESS! At least one marker was found. ---" : "\n--- DIAGNOSTIC COMPLETE: FAILURE. No markers found in any configuration. ---");
-				try { Process.Start("explorer.exe", diagPath); } catch { }
+			}
+			finally
+			{
+				if (handle.IsAllocated) handle.Free();
 			}
 		}
 
-		private bool TryDetect(Mat imageToTest, string logPath, string diagPath, string timestamp, string strategyName, bool useAggressiveParams)
+		private Dictionary<string, Mat> BuildProcessingStrategies(Mat bgr)
 		{
-			string paramType = useAggressiveParams ? "Aggressive" : "Default";
-			LogToFile(logPath, $"--> Attempting detection with {paramType} parameters...");
-
-			DetectorParameters parameters;
-			parameters = new DetectorParameters();
-			if (useAggressiveParams)
+			var dict = new Dictionary<string, Mat>();
+			// Grayscale
+			var gray = new Mat();
+			Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
+			dict["Grayscale"] = gray;
+			// Enhanced Contrast (alpha=1.5, beta=20)
+			var enhanced = new Mat();
+			gray.ConvertTo(enhanced, MatType.CV_8UC1, 1.5, 20);
+			dict["Enhanced Contrast"] = enhanced;
+			// CLAHE
+			var claheMat = new Mat();
+			using (var clahe = Cv2.CreateCLAHE(2.0, new OpenCvSharp.Size(8, 8)))
 			{
-				parameters.MinMarkerPerimeterRate = 0.01;
-				parameters.PolygonalApproxAccuracyRate = 0.08;
-				try { parameters.CornerRefinementMethod = CornerRefineMethod.Subpix; } catch { }
+				clahe.Apply(gray, claheMat);
 			}
-
-			var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict7X7_250);
-			Point2f[][] corners; int[] ids; Point2f[][] rejected;
-			CvAruco.DetectMarkers(imageToTest, dict, out corners, out ids, parameters, out rejected);
-
-			if (ids != null && ids.Length > 0)
+			dict["CLAHE"] = claheMat;
+			// Additional strategies for projector glare/noise
+			var blur3 = new Mat();
+			Cv2.GaussianBlur(gray, blur3, new OpenCvSharp.Size(3, 3), 0);
+			dict["Gray_Gauss3"] = blur3;
+			var median3 = new Mat();
+			Cv2.MedianBlur(gray, median3, 3);
+			dict["Gray_Median3"] = median3;
+			var bilateral = new Mat();
+			Cv2.BilateralFilter(gray, bilateral, 7, 60, 7);
+			dict["Gray_Bilateral7"] = bilateral;
+			var unsharp = new Mat();
+			using (var g5 = new Mat())
 			{
-				LogToFile(logPath, $"    [SUCCESS] FOUND {ids.Length} MARKERS!");
-				using (var resultImage = imageToTest.Channels() == 1 ? imageToTest.CvtColor(ColorConversionCodes.GRAY2BGR) : imageToTest.Clone())
-				{
-					CvAruco.DrawDetectedMarkers(resultImage, corners, ids, Scalar.LimeGreen);
-					string successFileName = $"DETECTED_{strategyName}_{paramType}_{timestamp}.png";
-					resultImage.SaveImage(System.IO.Path.Combine(diagPath, successFileName));
-					LogToFile(logPath, $"    Saved successful detection image to {successFileName}");
-				}
-				return true;
+				Cv2.GaussianBlur(gray, g5, new OpenCvSharp.Size(5, 5), 0);
+				Cv2.AddWeighted(gray, 1.5, g5, -0.5, 0, unsharp);
 			}
-			else
+			dict["Gray_Unsharp"] = unsharp;
+			// Gamma correction variants
+			dict["Gray_Gamma0_7"] = ApplyGamma(gray, 0.7);
+			dict["Gray_Gamma1_3"] = ApplyGamma(gray, 1.3);
+			// Adaptive thresholds
+			var atMean = new Mat();
+			Cv2.AdaptiveThreshold(gray, atMean, 255, AdaptiveThresholdTypes.MeanC, ThresholdTypes.Binary, 15, 7);
+			dict["AT_Mean_15_7"] = atMean;
+			var atGauss = new Mat();
+			Cv2.AdaptiveThreshold(gray, atGauss, 255, AdaptiveThresholdTypes.GaussianC, ThresholdTypes.Binary, 25, 5);
+			dict["AT_Gauss_25_5"] = atGauss;
+			// Inverted variants
+			var invGray = new Mat();
+			Cv2.BitwiseNot(gray, invGray);
+			dict["Gray_Inverted"] = invGray;
+			var invClahe = new Mat();
+			Cv2.BitwiseNot(claheMat, invClahe);
+			dict["CLAHE_Inverted"] = invClahe;
+			return dict;
+		}
+
+		private List<DetectorParameters> BuildDetectorParameterSets()
+		{
+			var list = new List<DetectorParameters>();
+			// Default
+			var def = new DetectorParameters();
+			try { def.CornerRefinementMethod = CornerRefineMethod.Subpix; } catch { }
+			try { def.DetectInvertedMarker = true; } catch { }
+			list.Add(def);
+			// Aggressive
+			var ag = new DetectorParameters();
+			ag.AdaptiveThreshWinSizeMin = 3;
+			ag.AdaptiveThreshWinSizeMax = 35;
+			ag.AdaptiveThreshWinSizeStep = 2;
+			ag.MinMarkerPerimeterRate = 0.01;
+			ag.MaxErroneousBitsInBorderRate = 0.8f;
+			try { ag.CornerRefinementMethod = CornerRefineMethod.Subpix; } catch { }
+			try { ag.DetectInvertedMarker = true; } catch { }
+			list.Add(ag);
+			// Very aggressive
+			var vag = new DetectorParameters();
+			vag.AdaptiveThreshWinSizeMin = 3;
+			vag.AdaptiveThreshWinSizeMax = 51;
+			vag.AdaptiveThreshWinSizeStep = 2;
+			vag.AdaptiveThreshConstant = 3;
+			vag.MinMarkerPerimeterRate = 0.005;
+			vag.MaxMarkerPerimeterRate = 6.0;
+			vag.MaxErroneousBitsInBorderRate = 0.9f;
+			vag.MinCornerDistanceRate = 0.01;
+			vag.MinDistanceToBorder = 0;
+			vag.MarkerBorderBits = 1;
+			try { vag.CornerRefinementMethod = CornerRefineMethod.Subpix; } catch { }
+			try { vag.DetectInvertedMarker = true; } catch { }
+			list.Add(vag);
+			return list;
+		}
+
+		private List<PredefinedDictionaryName> BuildDictionaries()
+		{
+			return new List<PredefinedDictionaryName>
 			{
-				LogToFile(logPath, "    [FAILURE] No markers found.");
-				return false;
+				PredefinedDictionaryName.Dict7X7_250,
+				PredefinedDictionaryName.Dict6X6_250,
+				PredefinedDictionaryName.Dict5X5_250,
+				PredefinedDictionaryName.Dict4X4_250
+			};
+		}
+
+		private Mat ApplyGamma(Mat srcGray, double gamma)
+		{
+			var lut = new Mat(1, 256, MatType.CV_8UC1);
+			var idx = lut.GetGenericIndexer<byte>();
+			for (int i = 0; i < 256; i++)
+			{
+				double normalized = i / 255.0;
+				double corrected = Math.Pow(normalized, gamma);
+				int val = (int)Math.Round(corrected * 255.0);
+				if (val < 0) val = 0; else if (val > 255) val = 255;
+				idx[0, i] = (byte)val;
 			}
+			var dst = new Mat();
+			Cv2.LUT(srcGray, lut, dst);
+			lut.Dispose();
+			return dst;
 		}
 
 		private void LogToFile(string path, string message)
 		{
 			try { File.AppendAllText(path, message + Environment.NewLine); } catch { }
+		}
+
+		private string DescribeParams(DetectorParameters p)
+		{
+			try
+			{
+				return string.Format("WinMin={0},WinMax={1},Step={2},MinPerim={3},MaxErrBits={4},CornerRef={5},Invert={6}",
+					p.AdaptiveThreshWinSizeMin, p.AdaptiveThreshWinSizeMax, p.AdaptiveThreshWinSizeStep,
+					p.MinMarkerPerimeterRate, p.MaxErroneousBitsInBorderRate,
+					p.CornerRefinementMethod, SafeGetDetectInverted(p));
+			}
+			catch { return "<params>"; }
+		}
+
+		private bool SafeGetDetectInverted(DetectorParameters p)
+		{
+			try { return p.DetectInvertedMarker; } catch { return false; }
+		}
+
+		private bool HasAllMarkerIds(int[] ids)
+		{
+			if (ids == null) return false;
+			for (int i = 0; i < 4; i++)
+			{
+				if (Array.IndexOf(ids, i) < 0) return false;
+			}
+			return true;
+		}
+
+		private void FilterDetections(Point2f[][] corners, int[] ids, int width, int height, out Point2f[][] outCorners, out int[] outIds, PredefinedDictionaryName dictName, string logPath)
+		{
+			var listCorners = new List<Point2f[]>();
+			var listIds = new List<int>();
+			if (corners != null && ids != null)
+			{
+				for (int i = 0; i < Math.Min(corners.Length, ids.Length); i++)
+				{
+					var quad = corners[i];
+					if (quad == null || quad.Length < 4) continue;
+					// Geometry checks: within bounds and reasonable size
+					double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+					for (int k = 0; k < 4; k++)
+					{
+						if (double.IsNaN(quad[k].X) || double.IsNaN(quad[k].Y)) { minX = double.MaxValue; break; }
+						if (quad[k].X < minX) minX = quad[k].X;
+						if (quad[k].Y < minY) minY = quad[k].Y;
+						if (quad[k].X > maxX) maxX = quad[k].X;
+						if (quad[k].Y > maxY) maxY = quad[k].Y;
+					}
+					if (minX == double.MaxValue) continue;
+					if (minX < 0 || minY < 0 || maxX >= width || maxY >= height) continue;
+					double wpx = maxX - minX, hpx = maxY - minY;
+					double area = wpx * hpx;
+					if (area < (width * height) * 0.00002) continue; // too small
+					if (area > (width * height) * 0.25) continue; // too large
+					int id = ids[i];
+					if (id < 0 || id > 249) continue;
+					listCorners.Add(quad);
+					listIds.Add(id);
+				}
+			}
+			outCorners = listCorners.Count > 0 ? listCorners.ToArray() : null;
+			outIds = listIds.Count > 0 ? listIds.ToArray() : null;
+			if (logPath != null)
+			{
+				LogToFile(logPath, string.Format("Filter: kept={0}, ids=[{1}]", listIds.Count, listIds.Count > 0 ? string.Join(",", listIds) : ""));
+			}
 		}
 
 		private void AppendStatus(string message)
