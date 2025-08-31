@@ -99,7 +99,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			projectorWindow.Show();
 			this.Activate();
-			// Load real markers from disk if available; otherwise let ProjectorWindow load embedded assets
+			// Quick check: ensure OpenCV native runtime is present; if not, warn so on-the-fly drawing won't work
+			VerifyOpenCvRuntimePresent();
+			// Load real markers from disk if available; otherwise generate on-the-fly; otherwise ProjectorWindow loads embedded assets
 			for (int i = 0; i < 4; i++)
 			{
 				var bmp = GenerateArucoMarkerBitmap(i, QrBaseSize);
@@ -110,7 +112,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			if (_usingRealMarkers)
 			{
-				AppendStatus("Projector: Using real ArUco marker PNGs (7x7_250).");
+				AppendStatus("Projector: Using real ArUco markers (disk or generated).");
 			}
 			else
 			{
@@ -573,6 +575,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 			}
 			return false;
+		}
+
+		private void VerifyOpenCvRuntimePresent()
+		{
+			try
+			{
+				// Attempt to call a trivial OpenCv function to verify native load works; if it fails, warn user
+				var ver = Cv2.GetVersionString();
+				if (string.IsNullOrWhiteSpace(ver)) { AppendStatus("WARNING: OpenCV runtime not found."); }
+			}
+			catch
+			{
+				AppendStatus("WARNING: OpenCV runtime DLLs missing. Place OpenCvSharpExtern.dll and opencv_* DLLs next to the EXE for on-the-fly marker generation.");
+			}
 		}
 
 		private void LogToFile(string path, string message)
