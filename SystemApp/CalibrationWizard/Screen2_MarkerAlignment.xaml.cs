@@ -18,6 +18,7 @@ using OpenCvSharp;
 using OpenCvSharp.WpfExtensions;
 using OpenCvSharp.Aruco;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace KinectCalibrationWPF.CalibrationWizard
 {
@@ -190,7 +191,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
-		private void FindMarkersButton_Click(object sender, RoutedEventArgs e)
+		private async void FindMarkersButton_Click(object sender, RoutedEventArgs e)
 		{
 			bool verbose = (EnableVerboseLogging != null && EnableVerboseLogging.IsChecked == true);
 			string baseDiag = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics");
@@ -213,6 +214,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				if (verbose) LogToFile(logPath, "ERROR: No color frame available.");
 				return;
 			}
+			FindMarkersButton.IsEnabled = false;
+			StatusText.Text = "Status: Detecting...";
 			var handle = GCHandle.Alloc(bgra, GCHandleType.Pinned);
 			try
 			{
@@ -225,6 +228,28 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						try { Cv2.ImWrite(System.IO.Path.Combine(diagDir, "00_bgr.png"), matBGR); } catch { }
 						try { LogToFile(logPath, $"SRC: {w}x{h}, stride={stride}"); } catch { }
 						try { LogToFile(logPath, $"OpenCV: {Cv2.GetVersionString()}"); } catch { }
+					}
+
+					// Quick minimal detection pass: grayscale with relaxed params across likely dictionaries
+					Point2f[][] quickCorners; int[] quickIds; string quickDict;
+					if (TryMinimalDictionarySweep(matBGR, w, h, out quickCorners, out quickIds, out quickDict, verbose ? logPath : null, verbose ? diagDir : null))
+					{
+						// Accept quick result immediately
+						var pairsQuick = new List<(int id, Point2f[] quad)>();
+						for (int i = 0; i < Math.Min(quickIds.Length, quickCorners.Length); i++)
+						{
+							pairsQuick.Add((quickIds[i], quickCorners[i]));
+						}
+						pairsQuick.Sort((a,b) => a.id.CompareTo(b.id));
+						_detectedIds = pairsQuick.Select(p => p.id).ToArray();
+						_detectedCorners = pairsQuick.Select(p => p.quad).ToArray();
+						StatusText.Text = $"Status: Found {quickIds.Length} marker(s) using Minimal+{quickDict}";
+						StatusText.Foreground = Brushes.Green;
+						CalibrateButton.IsEnabled = HasAllMarkerIds(quickIds);
+						NextButton.IsEnabled = HasAllMarkerIds(quickIds);
+						MarkersOverlay.Children.Clear();
+						AddDetections(quickCorners);
+						return;
 					}
 
 					// Task 2: Build processing strategies
@@ -243,41 +268,64 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					// Task 4: Multi-strategy detection loop
 					Point2f[][] bestCorners = null; int[] bestIds = null; string bestKey = null; string bestDictName = null; Point2f[][] bestRejected = null;
 					var dicts = BuildDictionaries();
-					foreach (var kv in strategyImages)
+					await Task.Run(() =>
 					{
-						foreach (var p in parameterSets)
+						var totalStart = Stopwatch.StartNew();
+						int rejectedSaved = 0;
+						foreach (var kv in strategyImages)
 						{
-							foreach (var dictName in dicts)
+							if (totalStart.ElapsedMilliseconds > 2500) break;
+							foreach (var p in parameterSets)
 							{
-								Point2f[][] corners; int[] ids; Point2f[][] rejected;
-								var dict = CvAruco.GetPredefinedDictionary(dictName);
-								var sw = verbose ? System.Diagnostics.Stopwatch.StartNew() : null;
-								CvAruco.DetectMarkers(kv.Value, dict, out corners, out ids, p, out rejected);
-								if (verbose && sw != null)
+								if (totalStart.ElapsedMilliseconds > 2500) break;
+								foreach (var dictName in dicts)
 								{
-									sw.Stop();
-									LogToFile(logPath, string.Format("Attempt: strategy={0}, dict={1}, params={2}, timeMs={3}, ids={4}", kv.Key, dictName, DescribeParams(p), sw.ElapsedMilliseconds, ids != null ? string.Join(",", ids) : "null"));
-								}
-								if (ids != null && ids.Length > 0)
-								{
-									Point2f[][] filteredCorners; int[] filteredIds;
-									FilterDetections(corners, ids, w, h, out filteredCorners, out filteredIds, dictName, verbose ? logPath : null);
-									if (filteredIds != null && filteredIds.Length > 0)
+									if (totalStart.ElapsedMilliseconds > 2500) break;
+									Point2f[][] corners; int[] ids; Point2f[][] rejected;
+									var dict = CvAruco.GetPredefinedDictionary(dictName);
+									CvAruco.DetectMarkers(kv.Value, dict, out corners, out ids, p, out rejected);
+									if (ids != null && ids.Length > 0)
 									{
-										bestCorners = filteredCorners; bestIds = filteredIds; bestKey = kv.Key; bestDictName = dictName.ToString(); bestRejected = rejected; break;
+										// Rescale detected corners back to original color frame size if strategy image size differs
+										double sx = (double)w / kv.Value.Width;
+										double sy = (double)h / kv.Value.Height;
+										if (Math.Abs(sx - 1.0) > 1e-6 || Math.Abs(sy - 1.0) > 1e-6)
+										{
+											for (int ci = 0; ci < corners.Length; ci++)
+											{
+												for (int pi = 0; pi < corners[ci].Length; pi++)
+												{
+													corners[ci][pi].X = (float)(corners[ci][pi].X * sx);
+													corners[ci][pi].Y = (float)(corners[ci][pi].Y * sy);
+												}
+											}
+										}
+										Point2f[][] filteredCorners; int[] filteredIds;
+										FilterDetections(corners, ids, w, h, out filteredCorners, out filteredIds, dictName, null);
+										if (filteredIds != null && filteredIds.Length > 0)
+										{
+											bestCorners = filteredCorners; bestIds = filteredIds; bestKey = kv.Key; bestDictName = dictName.ToString(); return;
+										}
 									}
 								}
+								if (bestIds != null) break;
 							}
 						}
-						if (bestIds != null) break;
-					}
+					});
 
 					foreach (var kv in strategyImages) kv.Value.Dispose();
 
 					if (bestIds != null && bestIds.Length > 0)
 					{
-						_detectedCorners = bestCorners;
-						_detectedIds = bestIds;
+						// Sort detections by ID to make UI overlays stable and mapping consistent
+						var pairs = new List<(int id, Point2f[] quad)>();
+						for (int i = 0; i < Math.Min(bestIds.Length, bestCorners.Length); i++)
+						{
+							pairs.Add((bestIds[i], bestCorners[i]));
+						}
+						pairs.Sort((a,b) => a.id.CompareTo(b.id));
+						_detectedIds = pairs.Select(p => p.id).ToArray();
+						_detectedCorners = pairs.Select(p => p.quad).ToArray();
 						StatusText.Text = $"Status: Found {bestIds.Length}/4 expected marker(s) [{string.Join(",", bestIds)}] using {bestKey}, dict={bestDictName}";
 						StatusText.Foreground = Brushes.Green;
 						CalibrateButton.IsEnabled = HasAllMarkerIds(bestIds);
@@ -314,6 +362,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			finally
 			{
 				if (handle.IsAllocated) handle.Free();
+				FindMarkersButton.IsEnabled = true;
 			}
 		}
 
@@ -369,6 +418,39 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var invClahe = new Mat();
 			Cv2.BitwiseNot(claheMat, invClahe);
 			dict["CLAHE_Inverted"] = invClahe;
+			// Binary threshold sweeps on CLAHE + morphology open/close
+			int[] thresholds = new int[] { 60, 100, 140, 180, 220 };
+			foreach (var t in thresholds)
+			{
+				var th = new Mat();
+				Cv2.Threshold(claheMat, th, t, 255, ThresholdTypes.Binary);
+				dict[$"CLAHE_Thresh_{t}"] = th;
+				var kernel3 = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3));
+				var opened = new Mat();
+				Cv2.MorphologyEx(th, opened, MorphTypes.Open, kernel3);
+				dict[$"CLAHE_Thresh_{t}_Open3"] = opened;
+				var closed = new Mat();
+				Cv2.MorphologyEx(th, closed, MorphTypes.Close, kernel3);
+				dict[$"CLAHE_Thresh_{t}_Close3"] = closed;
+			}
+			// Otsu on CLAHE
+			var otsu = new Mat();
+			Cv2.Threshold(claheMat, otsu, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);
+			dict["CLAHE_Otsu"] = otsu;
+			// Multi-scale variants (down/upscale) on key bases
+			double[] scales = new double[] { 0.5, 0.75, 1.25 };
+			foreach (var s in scales)
+			{
+				if (Math.Abs(s - 1.0) < 1e-6) continue;
+				var sz = new OpenCvSharp.Size((int)Math.Round(gray.Cols * s), (int)Math.Round(gray.Rows * s));
+				if (sz.Width < 64 || sz.Height < 64) continue;
+				var rGray = new Mat(); Cv2.Resize(gray, rGray, sz, 0, 0, InterpolationFlags.Area);
+				dict[$"Gray_Scale_{s:0.00}"] = rGray;
+				var rClahe = new Mat(); Cv2.Resize(claheMat, rClahe, sz, 0, 0, InterpolationFlags.Area);
+				dict[$"CLAHE_Scale_{s:0.00}"] = rClahe;
+				var rOtsu = new Mat(); Cv2.Resize(otsu, rOtsu, sz, 0, 0, InterpolationFlags.Nearest);
+				dict[$"Otsu_Scale_{s:0.00}"] = rOtsu;
+			}
 			return dict;
 		}
 
@@ -395,10 +477,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			vag.AdaptiveThreshWinSizeMin = 3;
 			vag.AdaptiveThreshWinSizeMax = 51;
 			vag.AdaptiveThreshWinSizeStep = 2;
-			vag.AdaptiveThreshConstant = 3;
+			vag.AdaptiveThreshConstant = 1;
 			vag.MinMarkerPerimeterRate = 0.005;
 			vag.MaxMarkerPerimeterRate = 6.0;
-			vag.MaxErroneousBitsInBorderRate = 0.9f;
+			vag.MaxErroneousBitsInBorderRate = 0.95f;
 			vag.MinCornerDistanceRate = 0.01;
 			vag.MinDistanceToBorder = 0;
 			vag.MarkerBorderBits = 1;
@@ -410,12 +492,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private List<PredefinedDictionaryName> BuildDictionaries()
 		{
+			// Try both 6x6 and 7x7 first (most likely), then smaller fallbacks
 			return new List<PredefinedDictionaryName>
 			{
-				PredefinedDictionaryName.Dict7X7_250,
 				PredefinedDictionaryName.Dict6X6_250,
-				PredefinedDictionaryName.Dict5X5_250,
-				PredefinedDictionaryName.Dict4X4_250
+				PredefinedDictionaryName.Dict7X7_250,
+				PredefinedDictionaryName.Dict4X4_50,
+				PredefinedDictionaryName.Dict5X5_100
 			};
 		}
 
@@ -435,6 +518,61 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			Cv2.LUT(srcGray, lut, dst);
 			lut.Dispose();
 			return dst;
+		}
+
+		private bool TryMinimalDictionarySweep(Mat bgr, int w, int h, out Point2f[][] outCorners, out int[] outIds, out string outDict, string logPath, string saveDir)
+		{
+			outCorners = null; outIds = null; outDict = string.Empty;
+			using (var gray = new Mat())
+			{
+				Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
+				var dicts = new[]
+				{
+					PredefinedDictionaryName.Dict6X6_250,
+					PredefinedDictionaryName.Dict7X7_250,
+					PredefinedDictionaryName.Dict5X5_100,
+					PredefinedDictionaryName.Dict4X4_50
+				};
+				var p = CreateRelaxedDetectorParameters();
+				foreach (var d in dicts)
+				{
+					try
+					{
+						Point2f[][] corners; int[] ids; Point2f[][] rejected;
+						var dict = CvAruco.GetPredefinedDictionary(d);
+						CvAruco.DetectMarkers(gray, dict, out corners, out ids, p, out rejected);
+						if (logPath != null)
+						{
+							LogToFile(logPath, $"Minimal sweep: Dict={d}, Found={(ids?.Length ?? 0)}, Rejected={(rejected?.Length ?? 0)}");
+						}
+						if (ids != null && ids.Length > 0)
+						{
+							// No scaling needed; using original size
+							Point2f[][] filtered; int[] fids;
+							FilterDetections(corners, ids, w, h, out filtered, out fids, d, logPath);
+							if (fids != null && fids.Length > 0)
+							{
+								outCorners = filtered; outIds = fids; outDict = d.ToString();
+								if (saveDir != null)
+								{
+									try
+									{
+										using (var vis = bgr.Clone())
+										{
+											CvAruco.DrawDetectedMarkers(vis, outCorners, outIds, Scalar.LimeGreen);
+											Cv2.ImWrite(System.IO.Path.Combine(saveDir, $"detected_minimal_{outDict}.png"), vis);
+										}
+									}
+									catch { }
+								}
+								return true;
+							}
+						}
+					}
+					catch { }
+				}
+			}
+			return false;
 		}
 
 		private void LogToFile(string path, string message)
@@ -495,8 +633,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					double area = wpx * hpx;
 					if (area < (width * height) * 0.00002) continue; // too small
 					if (area > (width * height) * 0.25) continue; // too large
+					// Keep only minimal geometry checks to avoid rejecting true markers under heavy perspective
+					double d01 = Distance(quad[0], quad[1]);
+					double d12 = Distance(quad[1], quad[2]);
+					double d23 = Distance(quad[2], quad[3]);
+					double d30 = Distance(quad[3], quad[0]);
+					double avg = (d01 + d12 + d23 + d30) / 4.0;
+					if (avg < 3.0) continue;
 					int id = ids[i];
-					if (id < 0 || id > 249) continue;
+					// Accept any ID for detection; calibration still requires 0..3
 					listCorners.Add(quad);
 					listIds.Add(id);
 				}
@@ -507,6 +652,29 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				LogToFile(logPath, string.Format("Filter: kept={0}, ids=[{1}]", listIds.Count, listIds.Count > 0 ? string.Join(",", listIds) : ""));
 			}
+		}
+
+		private double Distance(Point2f a, Point2f b)
+		{
+			double dx = a.X - b.X; double dy = a.Y - b.Y; return Math.Sqrt(dx * dx + dy * dy);
+		}
+
+		private double AngleDeg(Point2f prev, Point2f vertex, Point2f next)
+		{
+			double v1x = prev.X - vertex.X, v1y = prev.Y - vertex.Y;
+			double v2x = next.X - vertex.X, v2y = next.Y - vertex.Y;
+			double dot = v1x * v2x + v1y * v2y;
+			double n1 = Math.Sqrt(v1x * v1x + v1y * v1y);
+			double n2 = Math.Sqrt(v2x * v2x + v2y * v2y);
+			if (n1 < 1e-5 || n2 < 1e-5) return 0.0;
+			double cos = dot / (n1 * n2);
+			if (cos < -1) cos = -1; else if (cos > 1) cos = 1;
+			return Math.Acos(cos) * (180.0 / Math.PI);
+		}
+
+		private bool IsRightish(double angleDeg, double tolerance)
+		{
+			return Math.Abs(angleDeg - 90.0) <= tolerance;
 		}
 
 		private void AppendStatus(string message)
@@ -822,23 +990,44 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				// Try to load from disk if available: .\\Markers\\aruco_6x6_250_id{ID}.png
+				// Try to load from disk if available. Prefer 6x6_250 markers, then fall back to 7x7_250
 				string markersDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Markers");
-				string file = System.IO.Path.Combine(markersDir, $"aruco_7x7_250_id{id}.png");
-				if (System.IO.File.Exists(file))
+				string[] candidates = new[]
 				{
-					var bmp = new BitmapImage();
-					bmp.BeginInit();
-					bmp.CacheOption = BitmapCacheOption.OnLoad;
-					bmp.UriSource = new Uri(file, UriKind.Absolute);
-					bmp.EndInit();
-					bmp.Freeze();
+					System.IO.Path.Combine(markersDir, $"aruco_6x6_250_id{id}.png"),
+					System.IO.Path.Combine(markersDir, $"aruco_6x6_250_id_{id}.png"),
+					System.IO.Path.Combine(markersDir, $"aruco_7x7_250_id{id}.png"),
+					System.IO.Path.Combine(markersDir, $"aruco_7x7_250_id_{id}.png")
+				};
+				foreach (var file in candidates)
+				{
+					if (System.IO.File.Exists(file))
+					{
+						var bmp = new BitmapImage();
+						bmp.BeginInit();
+						bmp.CacheOption = BitmapCacheOption.OnLoad;
+						bmp.UriSource = new Uri(file, UriKind.Absolute);
+						bmp.EndInit();
+						bmp.Freeze();
+						_usingRealMarkers = true;
+						return bmp;
+					}
+				}
+			}
+			catch { }
+			// Fallback: generate a 6x6_250 marker programmatically to guarantee correct dictionary
+			try
+			{
+				using (var marker = new Mat())
+				{
+					var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict6X6_250);
+					CvAruco.DrawMarker(dict, id, size, marker, 1);
+					var bmp = marker.ToWriteableBitmap();
 					_usingRealMarkers = true;
 					return bmp;
 				}
 			}
 			catch { }
-			// No fallback drawing; return null to allow embedded resources to be used
 			return null;
 		}
 
