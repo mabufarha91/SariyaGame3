@@ -435,6 +435,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				Cv2.MorphologyEx(th, closed, MorphTypes.Close, kernel3);
 				dict[$"CLAHE_Thresh_{t}_Close3"] = closed;
 			}
+			// Aggressive CLAHE + Gamma to expand contrast for projected markers
+			var clahe2 = new Mat();
+			using (var c2 = Cv2.CreateCLAHE(4.0, new OpenCvSharp.Size(8, 8))) { c2.Apply(gray, clahe2); }
+			var clahe2Gamma = ApplyGamma(clahe2, 0.6);
+			dict["CLAHE_Aggressive"] = clahe2Gamma;
 			// Otsu on CLAHE
 			var otsu = new Mat();
 			Cv2.Threshold(claheMat, otsu, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);
