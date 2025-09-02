@@ -201,13 +201,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			string diagDir = System.IO.Path.Combine(baseDiag, ts);
 			string logPath = System.IO.Path.Combine(diagDir, "detection_log.txt");
 			if (verbose) { try { Directory.CreateDirectory(diagDir); } catch { } }
-			// Task 1: Acquire perfect, lossless image from WriteableBitmap/byte[]
+			
 			if (kinectManager == null)
 			{
 				AppendStatus("Camera not initialized.");
 				if (verbose) LogToFile(logPath, "ERROR: Kinect manager null.");
 				return;
 			}
+			
 			byte[] bgra;
 			int w, h, stride;
 			if (!kinectManager.TryGetColorFrameRaw(out bgra, out w, out h, out stride) || bgra == null)
@@ -216,155 +217,135 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				if (verbose) LogToFile(logPath, "ERROR: No color frame available.");
 				return;
 			}
+			
 			FindMarkersButton.IsEnabled = false;
-			StatusText.Text = "Status: Detecting...";
-			var handle = GCHandle.Alloc(bgra, GCHandleType.Pinned);
+			
+			// CRITICAL: Hide camera feed during detection (like reference video 0:44-1:55)
+			// This prevents detecting ArUco markers from the camera display itself
+			bool cameraWasVisible = CameraFeed.Visibility == Visibility.Visible;
+			if (cameraWasVisible)
+			{
+				CameraFeed.Visibility = Visibility.Collapsed;
+				if (verbose) LogToFile(logPath, "✅ Camera feed hidden to prevent detection interference (ref video method)");
+			}
+			
+			StatusText.Text = "Status: Professional ArUco Detection (Camera Hidden)...";
+			
 			try
 			{
-				using (var matBGRA = Mat.FromPixelData(h, w, MatType.CV_8UC4, handle.AddrOfPinnedObject(), stride))
-				using (var matBGR = new Mat())
+				// Run detection on background thread to prevent UI freezing
+				var result = await Task.Run(() =>
 				{
-					Cv2.CvtColor(matBGRA, matBGR, ColorConversionCodes.BGRA2BGR);
-					if (verbose)
+					var handle = GCHandle.Alloc(bgra, GCHandleType.Pinned);
+					try
 					{
-						try { Cv2.ImWrite(System.IO.Path.Combine(diagDir, "00_bgr.png"), matBGR); } catch { }
-						try { LogToFile(logPath, $"SRC: {w}x{h}, stride={stride}"); } catch { }
-						try { LogToFile(logPath, $"OpenCV: {Cv2.GetVersionString()}"); } catch { }
-					}
-
-					// Quick minimal detection pass: grayscale with relaxed params across likely dictionaries
-					Point2f[][] quickCorners; int[] quickIds; string quickDict;
-					if (TryMinimalDictionarySweep(matBGR, w, h, out quickCorners, out quickIds, out quickDict, verbose ? logPath : null, verbose ? diagDir : null))
-					{
-						// Accept quick result immediately
-						var pairsQuick = new List<(int id, Point2f[] quad)>();
-						for (int i = 0; i < Math.Min(quickIds.Length, quickCorners.Length); i++)
+						using (var matBGRA = Mat.FromPixelData(h, w, MatType.CV_8UC4, handle.AddrOfPinnedObject(), stride))
+						using (var matBGR = new Mat())
 						{
-							pairsQuick.Add((quickIds[i], quickCorners[i]));
-						}
-						pairsQuick.Sort((a,b) => a.id.CompareTo(b.id));
-						_detectedIds = pairsQuick.Select(p => p.id).ToArray();
-						_detectedCorners = pairsQuick.Select(p => p.quad).ToArray();
-						StatusText.Text = $"Status: Found {quickIds.Length} marker(s) using Minimal+{quickDict}";
-						StatusText.Foreground = Brushes.Green;
-						CalibrateButton.IsEnabled = HasAllMarkerIds(quickIds);
-						NextButton.IsEnabled = HasAllMarkerIds(quickIds);
-						MarkersOverlay.Children.Clear();
-						AddDetections(quickCorners);
-						return;
-					}
-
-					// Task 2: Build processing strategies
-					var strategyImages = BuildProcessingStrategies(matBGR);
-					if (verbose)
-					{
-						foreach (var kv in strategyImages)
-						{
-							try { Cv2.ImWrite(System.IO.Path.Combine(diagDir, $"strategy_{kv.Key.Replace(' ', '_')}.png"), kv.Value); } catch { }
-						}
-					}
-
-					// Task 3: Detector parameter sets (default + aggressive)
-					var parameterSets = BuildDetectorParameterSets();
-
-					// Task 4: Multi-strategy detection loop
-					Point2f[][] bestCorners = null; int[] bestIds = null; string bestKey = null; string bestDictName = null; Point2f[][] bestRejected = null;
-					var dicts = BuildDictionaries();
-					await Task.Run(() =>
-					{
-						var totalStart = Stopwatch.StartNew();
-						int rejectedSaved = 0;
-						foreach (var kv in strategyImages)
-						{
-							if (totalStart.ElapsedMilliseconds > 2500) break;
-							foreach (var p in parameterSets)
+							Cv2.CvtColor(matBGRA, matBGR, ColorConversionCodes.BGRA2BGR);
+							if (verbose)
 							{
-								if (totalStart.ElapsedMilliseconds > 2500) break;
-								foreach (var dictName in dicts)
+								try { Cv2.ImWrite(System.IO.Path.Combine(diagDir, "00_bgr.png"), matBGR); } catch { }
+								try { LogToFile(logPath, $"SRC: {w}x{h}, stride={stride}"); } catch { }
+								try { LogToFile(logPath, "STRATEGY: Fast ArUco detection (non-blocking)"); } catch { }
+							}
+
+							// COMPREHENSIVE DIAGNOSTICS FIRST
+							if (verbose)
+							{
+								try { LogToFile(logPath, "Running comprehensive diagnostics..."); } catch { }
+								
+								// 1. OpenCvSharp4 functionality diagnostics
+								bool opencvOk = RunOpenCvSharp4Diagnostics(diagDir, logPath);
+								if (!opencvOk)
 								{
-									if (totalStart.ElapsedMilliseconds > 2500) break;
-									Point2f[][] corners; int[] ids; Point2f[][] rejected;
-									var dict = CvAruco.GetPredefinedDictionary(dictName);
-									CvAruco.DetectMarkers(kv.Value, dict, out corners, out ids, p, out rejected);
-									if (ids != null && ids.Length > 0)
+									LogToFile(logPath, "⚠️  OpenCV issues detected - may affect detection");
+								}
+								
+								// 2. Projector window diagnostics - RUN ON MAIN THREAD
+								try
+								{
+									var projectorWindow = GetProjectorWindow();
+									if (projectorWindow != null)
 									{
-										// Rescale detected corners back to original color frame size if strategy image size differs
-										double sx = (double)w / kv.Value.Width;
-										double sy = (double)h / kv.Value.Height;
-										if (Math.Abs(sx - 1.0) > 1e-6 || Math.Abs(sy - 1.0) > 1e-6)
+										// Schedule projector diagnostics on UI thread to avoid threading error
+										System.Windows.Application.Current.Dispatcher.Invoke(() => 
 										{
-											for (int ci = 0; ci < corners.Length; ci++)
+											try
 											{
-												for (int pi = 0; pi < corners[ci].Length; pi++)
-												{
-													corners[ci][pi].X = (float)(corners[ci][pi].X * sx);
-													corners[ci][pi].Y = (float)(corners[ci][pi].Y * sy);
-												}
+												projectorWindow.SaveProjectorDiagnostics(diagDir);
 											}
-										}
-										Point2f[][] filteredCorners; int[] filteredIds;
-										FilterDetections(corners, ids, w, h, out filteredCorners, out filteredIds, dictName, null);
-										if (filteredIds != null && filteredIds.Length > 0)
-										{
-											bestCorners = filteredCorners; bestIds = filteredIds; bestKey = kv.Key; bestDictName = dictName.ToString(); return;
-										}
+											catch (Exception projEx)
+											{
+												LogToFile(logPath, $"⚠️  Projector diagnostics error: {projEx.Message}");
+											}
+										});
+										LogToFile(logPath, "✅ Projector window diagnostics completed");
+									}
+									else
+									{
+										LogToFile(logPath, "⚠️  Projector window not available for diagnostics");
 									}
 								}
-								if (bestIds != null) break;
-							}
-						}
-					});
-
-					foreach (var kv in strategyImages) kv.Value.Dispose();
-
-					if (bestIds != null && bestIds.Length > 0)
-					{
-						// Sort detections by ID to make UI overlays stable and mapping consistent
-						var pairs = new List<(int id, Point2f[] quad)>();
-						for (int i = 0; i < Math.Min(bestIds.Length, bestCorners.Length); i++)
-						{
-							pairs.Add((bestIds[i], bestCorners[i]));
-						}
-						pairs.Sort((a,b) => a.id.CompareTo(b.id));
-						_detectedIds = pairs.Select(p => p.id).ToArray();
-						_detectedCorners = pairs.Select(p => p.quad).ToArray();
-						StatusText.Text = $"Status: Found {bestIds.Length}/4 expected marker(s) [{string.Join(",", bestIds)}] using {bestKey}, dict={bestDictName}";
-						StatusText.Foreground = Brushes.Green;
-						CalibrateButton.IsEnabled = HasAllMarkerIds(bestIds);
-						NextButton.IsEnabled = HasAllMarkerIds(bestIds);
-						// Draw overlay outlines
-						MarkersOverlay.Children.Clear();
-						AddDetections(bestCorners);
-						if (verbose)
-						{
-							try
-							{
-								using (var vis = matBGR.Clone())
+								catch (Exception ex)
 								{
-									CvAruco.DrawDetectedMarkers(vis, bestCorners, bestIds, Scalar.LimeGreen);
-									Cv2.ImWrite(System.IO.Path.Combine(diagDir, "zz_detected.png"), vis);
+									LogToFile(logPath, $"⚠️  Projector diagnostics setup error: {ex.Message}");
 								}
 							}
-							catch { }
-						}
-						// Mark if calibration-ready (IDs 0..3 present)
-						if (!HasAllMarkerIds(bestIds))
-						{
-							StatusText.Text += " (IDs 0..3 not all present)";
+
+							// ArUco detection with full diagnostics
+							Point2f[][] corners; int[] ids;
+							if (TryFastArucoDetection(matBGR, w, h, out corners, out ids, verbose ? logPath : null, verbose ? diagDir : null))
+							{
+								return new { Success = true, Corners = corners, Ids = ids };
+							}
+							else
+							{
+								if (verbose) LogToFile(logPath, "RESULT: Fast ArUco detection failed after full diagnostics.");
+								return new { Success = false, Corners = (Point2f[][])null, Ids = (int[])null };
+							}
 						}
 					}
-					else
+					finally
 					{
-						StatusText.Text = "Status: No markers found. Try adjusting projector/camera.";
-						StatusText.Foreground = Brushes.OrangeRed;
-						if (verbose) LogToFile(logPath, "RESULT: No markers found in any strategy.");
+						if (handle.IsAllocated) handle.Free();
 					}
+				});
+
+				// Update UI on main thread
+				if (result.Success)
+				{
+					_detectedCorners = result.Corners;
+					_detectedIds = result.Ids;
+					StatusText.Text = $"Status: Found {result.Ids.Length} ArUco marker(s)";
+					StatusText.Foreground = Brushes.Green;
+					CalibrateButton.IsEnabled = HasAllMarkerIds(result.Ids);
+					NextButton.IsEnabled = HasAllMarkerIds(result.Ids);
+					MarkersOverlay.Children.Clear();
+					AddDetections(result.Corners);
 				}
+				else
+				{
+					StatusText.Text = "Status: No ArUco markers detected. Check marker display.";
+					StatusText.Foreground = Brushes.OrangeRed;
+				}
+			}
+			catch (Exception ex)
+			{
+				StatusText.Text = $"Status: Detection error - {ex.Message}";
+				StatusText.Foreground = Brushes.Red;
+				if (verbose) LogToFile(logPath, $"ERROR: {ex.Message}");
 			}
 			finally
 			{
-				if (handle.IsAllocated) handle.Free();
 				FindMarkersButton.IsEnabled = true;
+				
+				// Restore camera feed visibility if it was visible before
+				if (cameraWasVisible)
+				{
+					CameraFeed.Visibility = Visibility.Visible;
+					if (verbose) LogToFile(logPath, "✅ Camera feed restored after detection");
+				}
 			}
 		}
 
@@ -592,32 +573,182 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						}
 						if (ids != null && ids.Length > 0)
 						{
-							// No scaling needed; using original size
-							Point2f[][] filtered; int[] fids;
-							FilterDetections(corners, ids, w, h, out filtered, out fids, d, logPath);
-							if (fids != null && fids.Length > 0)
+							if (logPath != null)
 							{
-								outCorners = filtered; outIds = fids; outDict = d.ToString();
-								if (saveDir != null)
-								{
-									try
-									{
-										using (var vis = bgr.Clone())
-										{
-											CvAruco.DrawDetectedMarkers(vis, outCorners, outIds, Scalar.LimeGreen);
-											Cv2.ImWrite(System.IO.Path.Combine(saveDir, $"detected_minimal_{outDict}.png"), vis);
-										}
-									}
-									catch { }
-								}
-								return true;
+								LogToFile(logPath, $"  Before filtering: Found {ids.Length} markers with IDs: [{string.Join(",", ids)}]");
 							}
+							
+							// BYPASS FILTERING IN MINIMAL SWEEP - Accept ANY markers found by ArUco
+							outCorners = corners; outIds = ids; outDict = d.ToString();
+							if (logPath != null)
+							{
+								LogToFile(logPath, $"  BYPASSED filtering - accepting all {ids.Length} markers");
+							}
+							
+							if (saveDir != null)
+							{
+								try
+								{
+									using (var vis = bgr.Clone())
+									{
+										CvAruco.DrawDetectedMarkers(vis, outCorners, outIds, Scalar.LimeGreen);
+										Cv2.ImWrite(System.IO.Path.Combine(saveDir, $"detected_minimal_{outDict}.png"), vis);
+									}
+								}
+								catch { }
+							}
+							return true;
 						}
 					}
 					catch { }
 				}
 			}
 			return false;
+		}
+
+		private bool TryFastArucoDetection(Mat bgr, int width, int height, out Point2f[][] outCorners, out int[] outIds, string logPath, string saveDir)
+		{
+			outCorners = null;
+			outIds = null;
+			
+			try
+			{
+				// PROJECTED MARKER OPTIMIZED PARAMETERS - Very permissive for low contrast projected markers
+				var params1 = new DetectorParameters();
+				
+				// CRITICAL: Adaptive thresholding for projected markers (low contrast)
+				params1.AdaptiveThreshWinSizeMin = 3;
+				params1.AdaptiveThreshWinSizeMax = 51;  // Larger windows for projected markers
+				params1.AdaptiveThreshWinSizeStep = 2;
+				params1.AdaptiveThreshConstant = 3;     // Lower threshold constant for low contrast
+				
+				// CRITICAL: Very permissive size constraints for projected markers
+				params1.MinMarkerPerimeterRate = 0.005;  // Much lower minimum
+				params1.MaxMarkerPerimeterRate = 8.0;    // Higher maximum  
+				params1.MinCornerDistanceRate = 0.005;   // Very low corner distance
+				params1.MinDistanceToBorder = 0;         // Allow edge markers
+				
+				// CRITICAL: ULTRA-PERMISSIVE for projected markers (perspective/lighting issues)
+				params1.MaxErroneousBitsInBorderRate = 0.95f; // 95% error tolerance!  
+				params1.MinOtsuStdDev = 0.1;                  // Almost no contrast requirement
+				
+				// CRITICAL: Enhanced corner detection for projected markers
+				try { params1.CornerRefinementMethod = CornerRefineMethod.Subpix; } catch { }
+				try { params1.DetectInvertedMarker = true; } catch { }  // Check both orientations
+				
+				if (logPath != null) LogToFile(logPath, "USING PROJECTED MARKER OPTIMIZED PARAMETERS");
+				
+				// CRITICAL: Test dictionaries in order of what's actually projected
+				var dicts = new[] {
+					PredefinedDictionaryName.Dict7X7_250,  // What projector actually shows (from Assets)
+					PredefinedDictionaryName.Dict4X4_50,   // Detected successfully in tests
+					PredefinedDictionaryName.Dict6X6_250,  // Alternative markers
+					PredefinedDictionaryName.Dict5X5_50    // Final fallback
+				};
+				
+				using (var gray = new Mat())
+				{
+					Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
+					
+					// CRITICAL: Image enhancement for projected markers
+					using (var enhanced = new Mat())
+					{
+						// Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for projected markers
+						using (var clahe = Cv2.CreateCLAHE(3.0, new OpenCvSharp.Size(8, 8)))
+						{
+							clahe.Apply(gray, enhanced);
+						}
+						
+						if (saveDir != null)
+						{
+							try { Cv2.ImWrite(System.IO.Path.Combine(saveDir, "01_original_gray.png"), gray); } catch { }
+							try { Cv2.ImWrite(System.IO.Path.Combine(saveDir, "02_enhanced_clahe.png"), enhanced); } catch { }
+						}
+						
+						// Try detection on both original and enhanced images
+						var images = new[] { 
+							("Original", gray),
+							("CLAHE_Enhanced", enhanced)
+						};
+						
+						foreach (var (imageName, testImage) in images)
+						{
+							if (logPath != null) LogToFile(logPath, $"Testing image: {imageName}");
+							
+							foreach (var dictName in dicts)
+							{
+								if (logPath != null) LogToFile(logPath, $"  Testing dictionary: {dictName}");
+								
+								try
+								{
+									var dict = CvAruco.GetPredefinedDictionary(dictName);
+									Point2f[][] corners; int[] ids; Point2f[][] rejected;
+									
+									CvAruco.DetectMarkers(testImage, dict, out corners, out ids, params1, out rejected);
+									
+									if (logPath != null)
+									{
+										LogToFile(logPath, $"    Raw result: Found={ids?.Length ?? 0}, Rejected={rejected?.Length ?? 0}");
+									}
+									
+									if (ids != null && ids.Length > 0)
+									{
+										// CRITICAL: Apply spatial and ID filtering for projected markers
+										Point2f[][] filteredCorners;
+										int[] filteredIds;
+										
+										if (FilterProjectedMarkers(corners, ids, width, height, out filteredCorners, out filteredIds, logPath))
+										{
+											outCorners = filteredCorners;
+											outIds = filteredIds;
+											
+											if (logPath != null)
+											{
+												LogToFile(logPath, $"SUCCESS: {imageName} + {dictName} found {filteredIds.Length} VALID projected markers: [{string.Join(",", filteredIds)}]");
+												LogToFile(logPath, $"  (Filtered from {ids.Length} total detections: [{string.Join(",", ids)}])");
+											}
+											
+											if (saveDir != null)
+											{
+												try
+												{
+													using (var vis = bgr.Clone())
+													{
+														CvAruco.DrawDetectedMarkers(vis, filteredCorners, filteredIds, Scalar.LimeGreen);
+														Cv2.ImWrite(System.IO.Path.Combine(saveDir, $"03_detected_{imageName}_{dictName}.png"), vis);
+													}
+												}
+												catch { }
+											}
+											
+											return true;
+										}
+										else
+										{
+											if (logPath != null)
+											{
+												LogToFile(logPath, $"FILTERED: {imageName} + {dictName} detected {ids.Length} markers [{string.Join(",", ids)}] but NONE are in projection area");
+											}
+										}
+									}
+								}
+								catch (Exception ex)
+								{
+									if (logPath != null) LogToFile(logPath, $"    Exception with {dictName}: {ex.Message}");
+								}
+							}
+						}
+					}
+				}
+				
+				if (logPath != null) LogToFile(logPath, "PROJECTED MARKER DETECTION: All attempts failed");
+				return false;
+			}
+			catch (Exception ex)
+			{
+				if (logPath != null) LogToFile(logPath, $"Projected marker detection error: {ex.Message}");
+				return false;
+			}
 		}
 
 		private void VerifyOpenCvRuntimePresent()
@@ -634,9 +765,430 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
+		private bool TryGeometricMarkerDetection(Mat bgr, int width, int height, out Point2f[][] outQuads, out int[] outIds, string logPath, string saveDir)
+		{
+			outQuads = null;
+			outIds = null;
+			var detectedQuads = new List<Point2f[]>();
+			var assignedIds = new List<int>();
+			
+			try
+			{
+				using (var gray = new Mat())
+				{
+					Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
+					if (saveDir != null)
+					{
+						try { Cv2.ImWrite(System.IO.Path.Combine(saveDir, "geometric_gray.png"), gray); } catch { }
+					}
+					
+					// Apply CLAHE for better contrast
+					using (var clahe = Cv2.CreateCLAHE(3.0, new OpenCvSharp.Size(8, 8)))
+					using (var enhanced = new Mat())
+					{
+						clahe.Apply(gray, enhanced);
+						if (saveDir != null)
+						{
+							try { Cv2.ImWrite(System.IO.Path.Combine(saveDir, "geometric_clahe.png"), enhanced); } catch { }
+						}
+						
+						// Binary threshold
+						using (var binary = new Mat())
+						{
+							Cv2.Threshold(enhanced, binary, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);
+							if (saveDir != null)
+							{
+								try { Cv2.ImWrite(System.IO.Path.Combine(saveDir, "geometric_binary.png"), binary); } catch { }
+							}
+							
+							// Find contours
+							using (var contours = new Mat())
+							{
+								OpenCvSharp.Point[][] allContours;
+								HierarchyIndex[] hierarchy;
+								Cv2.FindContours(binary, out allContours, out hierarchy, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+								
+								if (logPath != null)
+								{
+									LogToFile(logPath, $"Found {allContours.Length} contours");
+								}
+								
+								// Look for rectangular contours
+								foreach (var contour in allContours)
+								{
+									if (contour.Length < 4) continue;
+									
+									// Approximate contour to polygon
+									var epsilon = 0.02 * Cv2.ArcLength(contour, true);
+									var approx = Cv2.ApproxPolyDP(contour, epsilon, true);
+									
+									// Must be a quadrilateral
+									if (approx.Length != 4) continue;
+									
+									// Check if it's convex
+									if (!Cv2.IsContourConvex(approx)) continue;
+									
+									// Check area
+									var area = Math.Abs(Cv2.ContourArea(approx));
+									var minArea = (width * height) * 0.001; // At least 0.1% of image
+									var maxArea = (width * height) * 0.15;  // At most 15% of image
+									
+									if (area < minArea || area > maxArea) continue;
+									
+									// Check aspect ratio (should be roughly square)
+									var rect = Cv2.BoundingRect(approx);
+									var aspectRatio = (double)rect.Width / rect.Height;
+									if (aspectRatio < 0.3 || aspectRatio > 3.0) continue;
+									
+									// Check if corners are reasonable distances apart
+									var corners = approx.Select(p => new Point2f(p.X, p.Y)).ToArray();
+									var distances = new[]
+									{
+										Distance(corners[0], corners[1]),
+										Distance(corners[1], corners[2]),
+										Distance(corners[2], corners[3]),
+										Distance(corners[3], corners[0])
+									};
+									var avgDistance = distances.Average();
+									if (avgDistance < 20 || avgDistance > 500) continue;
+									
+									// Order corners consistently (clockwise from top-left)
+									var orderedCorners = OrderCornersClockwise(corners);
+									detectedQuads.Add(orderedCorners);
+									
+									if (logPath != null)
+									{
+										LogToFile(logPath, $"Accepted quad: area={area:F0}, avgDist={avgDistance:F1}, aspect={aspectRatio:F2}");
+									}
+								}
+							}
+						}
+					}
+				}
+				
+				if (detectedQuads.Count == 0)
+				{
+					if (logPath != null) LogToFile(logPath, "No valid rectangular contours found");
+					return false;
+				}
+				
+				// Sort by position and assign IDs (0=top-left, 1=top-right, 2=bottom-right, 3=bottom-left)
+				var sorted = detectedQuads
+					.Select(quad => new { 
+						Quad = quad, 
+						Center = new Point2f(quad.Average(p => p.X), quad.Average(p => p.Y)) 
+					})
+					.OrderBy(x => x.Center.Y) // Top to bottom first
+					.ThenBy(x => x.Center.X)  // Then left to right
+					.ToArray();
+				
+				// Assign IDs based on expected positions
+				detectedQuads.Clear();
+				assignedIds.Clear();
+				for (int i = 0; i < Math.Min(4, sorted.Length); i++)
+				{
+					detectedQuads.Add(sorted[i].Quad);
+					assignedIds.Add(i);
+				}
+				
+				outQuads = detectedQuads.Take(4).ToArray();
+				outIds = assignedIds.Take(4).ToArray();
+				
+				if (logPath != null)
+				{
+					LogToFile(logPath, $"Geometric detection: Found {outQuads.Length} markers with IDs [{string.Join(",", outIds)}]");
+				}
+				
+				return outQuads.Length > 0;
+			}
+			catch (Exception ex)
+			{
+				if (logPath != null) LogToFile(logPath, $"Geometric detection error: {ex.Message}");
+				return false;
+			}
+		}
+		
+		private Point2f[] OrderCornersClockwise(Point2f[] corners)
+		{
+			// Find the center point
+			var centerX = corners.Average(p => p.X);
+			var centerY = corners.Average(p => p.Y);
+			var center = new Point2f(centerX, centerY);
+			
+			// Sort by angle from center
+			var sorted = corners
+				.Select(p => new { 
+					Point = p, 
+					Angle = Math.Atan2(p.Y - center.Y, p.X - center.X) 
+				})
+				.OrderBy(x => x.Angle)
+				.Select(x => x.Point)
+				.ToArray();
+			
+			return sorted;
+		}
+
 		private void LogToFile(string path, string message)
 		{
 			try { File.AppendAllText(path, message + Environment.NewLine); } catch { }
+		}
+
+		private ProjectorWindow GetProjectorWindow()
+		{
+			// Return the projector window instance managed by this screen
+			return projectorWindow;
+		}
+
+		private bool FilterProjectedMarkers(Point2f[][] corners, int[] ids, int imageWidth, int imageHeight, out Point2f[][] filteredCorners, out int[] filteredIds, string logPath)
+		{
+			var validCorners = new List<Point2f[]>();
+			var validIds = new List<int>();
+			
+			try
+			{
+				if (logPath != null) LogToFile(logPath, "\n--- PROJECTED MARKER FILTERING ---");
+				
+				// Get projector window bounds for spatial filtering
+				double projectorLeft = 0, projectorTop = 0, projectorRight = imageWidth, projectorBottom = imageHeight;
+				
+				var projWindow = GetProjectorWindow();
+				if (projWindow != null)
+				{
+					try
+					{
+						// Get projector window area in camera coordinates
+						// This is a rough approximation - in a real system you'd have proper coordinate mapping
+						var projWidth = projWindow.ActualWidth > 0 ? projWindow.ActualWidth : 1536;
+						var projHeight = projWindow.ActualHeight > 0 ? projWindow.ActualHeight : 864;
+						
+						// IMPROVED: Calculate projection area based on actual setup
+						// For now, assume projector area covers a central region of camera view
+						// In a calibrated system, this would use proper coordinate transformation
+						
+						// Start with 60% of camera view as projection area (conservative estimate)
+						var projAreaWidth = imageWidth * 0.6;
+						var projAreaHeight = imageHeight * 0.6;
+						
+						// Center the projection area in camera view
+						var centerX = imageWidth / 2.0;
+						var centerY = imageHeight / 2.0;
+						
+						projectorLeft = centerX - projAreaWidth / 2.0;
+						projectorRight = centerX + projAreaWidth / 2.0;
+						projectorTop = centerY - projAreaHeight / 2.0;
+						projectorBottom = centerY + projAreaHeight / 2.0;
+						
+						if (logPath != null) LogToFile(logPath, $"Projection area filter: ({projectorLeft:F0},{projectorTop:F0}) to ({projectorRight:F0},{projectorBottom:F0})");
+					}
+					catch (Exception ex)
+					{
+						if (logPath != null) LogToFile(logPath, $"Failed to get projector bounds: {ex.Message}");
+					}
+				}
+				
+				for (int i = 0; i < Math.Min(corners.Length, ids.Length); i++)
+				{
+					var corner = corners[i];
+					var id = ids[i];
+					
+					if (corner == null || corner.Length < 4)
+					{
+						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Invalid corner data");
+						continue;
+					}
+					
+					// Calculate marker center and bounds
+					var centerX = corner.Average(p => p.X);
+					var centerY = corner.Average(p => p.Y);
+					var minX = corner.Min(p => p.X);
+					var maxX = corner.Max(p => p.X);
+					var minY = corner.Min(p => p.Y);
+					var maxY = corner.Max(p => p.Y);
+					var width = maxX - minX;
+					var height = maxY - minY;
+					
+					if (logPath != null) LogToFile(logPath, $"Marker {id}: Center=({centerX:F1},{centerY:F1}), Size={width:F1}x{height:F1}");
+					
+					// FILTER 1: Spatial bounds - must be in projection area
+					if (centerX < projectorLeft || centerX > projectorRight || centerY < projectorTop || centerY > projectorBottom)
+					{
+						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Outside projection area");
+						continue;
+					}
+					
+					// FILTER 2: Size validation - reasonable size for projected markers  
+					if (width < 20 || width > 500 || height < 20 || height > 500)
+					{
+						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Invalid size ({width:F1}x{height:F1})");
+						continue;
+					}
+					
+					// FILTER 3: Aspect ratio - should be roughly square
+					var aspectRatio = width / height;
+					if (aspectRatio < 0.5 || aspectRatio > 2.0)
+					{
+						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Invalid aspect ratio ({aspectRatio:F2})");
+						continue;
+					}
+					
+					// FILTER 4: ID validation - accept expected marker IDs (0-3) or reasonable alternatives
+					if (id < 0 || id > 100)
+					{
+						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Invalid ID range");
+						continue;
+					}
+					
+					// PASSED all filters
+					validCorners.Add(corner);
+					validIds.Add(id);
+					if (logPath != null) LogToFile(logPath, $"Marker {id}: ACCEPTED - Valid projected marker");
+				}
+				
+				if (logPath != null) LogToFile(logPath, $"FILTERING RESULT: {validIds.Count} valid markers from {ids.Length} detected");
+				
+			}
+			catch (Exception ex)
+			{
+				if (logPath != null) LogToFile(logPath, $"Filtering error: {ex.Message}");
+			}
+			
+			filteredCorners = validCorners.ToArray();
+			filteredIds = validIds.ToArray();
+			
+			return filteredCorners.Length > 0;
+		}
+
+		private bool RunOpenCvSharp4Diagnostics(string diagDir, string logPath)
+		{
+			try
+			{
+				LogToFile(logPath, "\n=== OPENCVSHARP4 DIAGNOSTICS ===");
+				
+				// Test 1: Basic OpenCV functionality
+				try
+				{
+					using (var testMat = new Mat(100, 100, MatType.CV_8UC1, Scalar.All(128)))
+					{
+						LogToFile(logPath, $"✅ Basic Mat creation: SUCCESS ({testMat.Width}x{testMat.Height})");
+					}
+				}
+				catch (Exception ex)
+				{
+					LogToFile(logPath, $"❌ Basic Mat creation: FAILED - {ex.Message}");
+					return false;
+				}
+				
+				// Test 2: OpenCV Version
+				try
+				{
+					var version = Cv2.GetVersionString();
+					LogToFile(logPath, $"✅ OpenCV Version: {version}");
+				}
+				catch (Exception ex)
+				{
+					LogToFile(logPath, $"❌ OpenCV Version check: FAILED - {ex.Message}");
+				}
+				
+				// Test 3: ArUco dictionary loading
+				bool arucoWorking = true;
+				var testDicts = new[] {
+					PredefinedDictionaryName.Dict4X4_50,
+					PredefinedDictionaryName.Dict5X5_50,
+					PredefinedDictionaryName.Dict6X6_250,
+					PredefinedDictionaryName.Dict7X7_250
+				};
+				
+				foreach (var dictName in testDicts)
+				{
+					try
+					{
+						using (var dict = CvAruco.GetPredefinedDictionary(dictName))
+						{
+							LogToFile(logPath, $"✅ Dictionary {dictName}: SUCCESS (size={dict.MarkerSize})");
+						}
+					}
+					catch (Exception ex)
+					{
+						LogToFile(logPath, $"❌ Dictionary {dictName}: FAILED - {ex.Message}");
+						arucoWorking = false;
+					}
+				}
+				
+				// Test 4: Basic detection functionality test  
+				try
+				{
+					LogToFile(logPath, "\n--- BASIC DETECTION TEST ---");
+					
+					// Create a simple test image with white background
+					using (var testImage = new Mat(200, 200, MatType.CV_8UC3, Scalar.All(255)))
+					using (var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50))
+					{
+						// Test basic detection on white image (should find nothing)
+						using (var grayImage = new Mat())
+						{
+							Cv2.CvtColor(testImage, grayImage, ColorConversionCodes.BGR2GRAY);
+							
+							var params1 = new DetectorParameters();
+							Point2f[][] corners; int[] ids; Point2f[][] rejected;
+							
+							CvAruco.DetectMarkers(grayImage, dict, out corners, out ids, params1, out rejected);
+							
+							LogToFile(logPath, $"✅ Basic detection test: SUCCESS - Found {ids?.Length ?? 0} markers (expected 0 on white image)");
+							
+							// Save test image
+							var testPath = System.IO.Path.Combine(diagDir, "opencv_detection_test.png");
+							Cv2.ImWrite(testPath, testImage);
+							LogToFile(logPath, "Basic test image saved: opencv_detection_test.png");
+						}
+					}
+				}
+				catch (Exception ex)
+				{
+					LogToFile(logPath, $"❌ Basic detection test: FAILED - {ex.Message}");
+					arucoWorking = false;
+				}
+				
+				// Test 5: CLAHE functionality
+				try
+				{
+					using (var testImg = new Mat(100, 100, MatType.CV_8UC1, Scalar.All(128)))
+					using (var clahe = Cv2.CreateCLAHE(3.0, new OpenCvSharp.Size(8, 8)))
+					using (var enhanced = new Mat())
+					{
+						clahe.Apply(testImg, enhanced);
+						LogToFile(logPath, "✅ CLAHE enhancement: SUCCESS");
+					}
+				}
+				catch (Exception ex)
+				{
+					LogToFile(logPath, $"❌ CLAHE enhancement: FAILED - {ex.Message}");
+				}
+				
+				// Test 6: Color conversion
+				try
+				{
+					using (var colorImg = new Mat(50, 50, MatType.CV_8UC3, Scalar.All(128)))
+					using (var grayImg = new Mat())
+					{
+						Cv2.CvtColor(colorImg, grayImg, ColorConversionCodes.BGR2GRAY);
+						LogToFile(logPath, "✅ Color conversion: SUCCESS");
+					}
+				}
+				catch (Exception ex)
+				{
+					LogToFile(logPath, $"❌ Color conversion: FAILED - {ex.Message}");
+				}
+				
+				LogToFile(logPath, $"\n=== OPENCVSHARP4 DIAGNOSTICS RESULT ===");
+				LogToFile(logPath, arucoWorking ? "✅ OPENCV STATUS: FULLY FUNCTIONAL" : "❌ OPENCV STATUS: ISSUES DETECTED");
+				
+				return arucoWorking;
+			}
+			catch (Exception ex)
+			{
+				LogToFile(logPath, $"❌ OpenCvSharp4 diagnostics failed: {ex.Message}");
+				return false;
+			}
 		}
 
 		private string DescribeParams(DetectorParameters p)
@@ -932,33 +1484,76 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private void AddMarkerFromQuad(Point2f[] quad)
 		{
+			// Calculate center of detected ArUco marker
 			double cx = 0, cy = 0;
 			for (int i = 0; i < 4; i++) { cx += quad[i].X; cy += quad[i].Y; }
 			cx /= 4.0; cy /= 4.0;
+			
+			// Store color space coordinate
 			lastDetectedCentersColor.Add(new System.Windows.Point(cx, cy));
-			var canvasPt = ColorToCanvas(new System.Windows.Point(cx, cy));
-			var dot = new Ellipse { Width = 18, Height = 18, Fill = Brushes.Red, Stroke = Brushes.White, StrokeThickness = 2 };
-			Canvas.SetLeft(dot, canvasPt.X - 9);
-			Canvas.SetTop(dot, canvasPt.Y - 9);
+			
+			// Transform to canvas coordinates with detailed logging
+			var colorPt = new System.Windows.Point(cx, cy);
+			var canvasPt = ColorToCanvas(colorPt);
+			
+			// Log coordinate transformation for debugging overlay alignment
+			System.Diagnostics.Debug.WriteLine($"ArUco Center: Color({cx:F1},{cy:F1}) → Canvas({canvasPt.X:F1},{canvasPt.Y:F1})");
+			
+			// Create red dot overlay with larger size for better visibility
+			var dot = new Ellipse { Width = 24, Height = 24, Fill = Brushes.Red, Stroke = Brushes.Yellow, StrokeThickness = 3 };
+			Canvas.SetLeft(dot, canvasPt.X - 12);  // Center the 24px dot
+			Canvas.SetTop(dot, canvasPt.Y - 12);
 			MarkersOverlay.Children.Add(dot);
+			
+			// Add corner dots for better visualization
+			for (int i = 0; i < 4; i++)
+			{
+				var cornerColorPt = new System.Windows.Point(quad[i].X, quad[i].Y);
+				var cornerCanvasPt = ColorToCanvas(cornerColorPt);
+				var cornerDot = new Ellipse { Width = 8, Height = 8, Fill = Brushes.LimeGreen, Stroke = Brushes.Black, StrokeThickness = 1 };
+				Canvas.SetLeft(cornerDot, cornerCanvasPt.X - 4);
+				Canvas.SetTop(cornerDot, cornerCanvasPt.Y - 4);
+				MarkersOverlay.Children.Add(cornerDot);
+			}
 		}
 
 		private System.Windows.Point ColorToCanvas(System.Windows.Point colorPoint)
 		{
+			// Get actual dimensions
 			double containerW = MarkersOverlay.ActualWidth;
 			double containerH = MarkersOverlay.ActualHeight;
 			int colorW = (kinectManager != null && kinectManager.ColorWidth > 0) ? kinectManager.ColorWidth : 1920;
 			int colorH = (kinectManager != null && kinectManager.ColorHeight > 0) ? kinectManager.ColorHeight : 1080;
-			if (containerW <= 0 || containerH <= 0) { containerW = 640; containerH = 480; }
+			
+			// Debug logging for coordinate transformation issues
+			System.Diagnostics.Debug.WriteLine($"ColorToCanvas: Container={containerW:F1}x{containerH:F1}, Color={colorW}x{colorH}");
+			
+			// Fallback if container not properly sized
+			if (containerW <= 0 || containerH <= 0) 
+			{ 
+				containerW = 800; 
+				containerH = 600; 
+				System.Diagnostics.Debug.WriteLine($"ColorToCanvas: Using fallback container size {containerW}x{containerH}");
+			}
+			
+			// Calculate scaling to fit color image in container (maintaining aspect ratio)
 			double sx = containerW / colorW;
 			double sy = containerH / colorH;
-			double scale = Math.Min(sx, sy);
+			double scale = Math.Min(sx, sy);  // Uniform scaling to fit
+			
+			// Calculate displayed image dimensions and centering offsets
 			double displayedW = colorW * scale;
 			double displayedH = colorH * scale;
 			double offsetX = (containerW - displayedW) / 2.0;
 			double offsetY = (containerH - displayedH) / 2.0;
+			
+			// Transform color coordinates to canvas coordinates
 			double x = colorPoint.X * scale + offsetX;
 			double y = colorPoint.Y * scale + offsetY;
+			
+			// Debug logging for transformation details
+			System.Diagnostics.Debug.WriteLine($"ColorToCanvas: ({colorPoint.X:F1},{colorPoint.Y:F1}) → ({x:F1},{y:F1}) [scale={scale:F3}, offset=({offsetX:F1},{offsetY:F1})]");
+			
 			return new System.Windows.Point(x, y);
 		}
 

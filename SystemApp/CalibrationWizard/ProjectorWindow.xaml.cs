@@ -75,10 +75,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				for (int i = 0; i < markers.Length; i++)
 				{
 					if (markers[i].Source != null) continue;
-					// Try preferred aruco_7x7_250 naming
+					
+					// Load existing 7x7 markers (detection will handle them with ultra-permissive parameters)
 					var uris = new[]
 					{
 						$"pack://application:,,,/Assets/aruco_7x7_250_id{i}.png",
+						$"pack://application:,,,/Assets/aruco_4x4_50_id{i}.png",
 						$"pack://application:,,,/Assets/marker_{i}.png"
 					};
 					foreach (var uri in uris)
@@ -96,11 +98,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			catch (Exception ex)
 			{
-				MessageBox.Show($"Error loading embedded marker images: {ex.Message}\n\n" +
+				MessageBox.Show($"Error loading marker images: {ex.Message}\n\n" +
 					"Ensure images exist in 'Assets' and their Build Action is set to 'Resource'.",
 					"Resource Error", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
-			// No popup if nothing loaded and external code will supply sources via SetMarkerSource
 		}
 
 		public Point GetMarkerCenter(int index)
@@ -111,6 +112,129 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			double w = markers[index].ActualWidth > 0 ? markers[index].ActualWidth : markers[index].Width;
 			double h = markers[index].ActualHeight > 0 ? markers[index].ActualHeight : markers[index].Height;
 			return new Point(x + w / 2.0, y + h / 2.0);
+		}
+
+		public void SaveProjectorDiagnostics(string diagDir)
+		{
+			try
+			{
+				System.IO.Directory.CreateDirectory(diagDir);
+				var logPath = System.IO.Path.Combine(diagDir, "projector_diagnostics.txt");
+				
+				// Log projector window state
+				LogToFile(logPath, "=== PROJECTOR WINDOW DIAGNOSTICS ===");
+				LogToFile(logPath, $"Window Size: {this.ActualWidth}x{this.ActualHeight}");
+				LogToFile(logPath, $"Canvas Size: {MarkerCanvas.ActualWidth}x{MarkerCanvas.ActualHeight}");
+				LogToFile(logPath, $"Window State: {this.WindowState}");
+				LogToFile(logPath, $"Visibility: {this.Visibility}");
+				
+				// Capture individual marker diagnostics
+				for (int i = 0; i < markers.Length; i++)
+				{
+					LogToFile(logPath, $"\n--- MARKER {i} ---");
+					
+					var marker = markers[i];
+					var x = Canvas.GetLeft(marker);
+					var y = Canvas.GetTop(marker);
+					var w = marker.ActualWidth > 0 ? marker.ActualWidth : marker.Width;
+					var h = marker.ActualHeight > 0 ? marker.ActualHeight : marker.Height;
+					
+					LogToFile(logPath, $"Position: ({x:F1}, {y:F1})");
+					LogToFile(logPath, $"Size: {w:F1}x{h:F1}");
+					LogToFile(logPath, $"Scale: {scales[i].ScaleX:F2}x{scales[i].ScaleY:F2}");
+					LogToFile(logPath, $"Visibility: {marker.Visibility}");
+					LogToFile(logPath, $"Source: {(marker.Source != null ? "Loaded" : "NULL")}");
+					
+					if (marker.Source != null)
+					{
+						var bitmapSource = marker.Source as System.Windows.Media.Imaging.BitmapSource;
+						if (bitmapSource != null)
+						{
+							LogToFile(logPath, $"Source Size: {bitmapSource.PixelWidth}x{bitmapSource.PixelHeight}");
+							LogToFile(logPath, $"Source DPI: {bitmapSource.DpiX:F1}x{bitmapSource.DpiY:F1}");
+							
+							// Save individual marker image
+							try
+							{
+								var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+								encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmapSource));
+								var markerPath = System.IO.Path.Combine(diagDir, $"projector_marker_{i}.png");
+								using (var stream = new System.IO.FileStream(markerPath, System.IO.FileMode.Create))
+								{
+									encoder.Save(stream);
+								}
+								LogToFile(logPath, $"Individual marker saved: projector_marker_{i}.png");
+							}
+							catch (Exception ex)
+							{
+								LogToFile(logPath, $"Failed to save marker {i}: {ex.Message}");
+							}
+						}
+						else
+						{
+							LogToFile(logPath, "Source is not a BitmapSource - cannot get pixel dimensions");
+						}
+					}
+				}
+				
+				// Capture full projector canvas screenshot
+				try
+				{
+					var canvasScreenshot = CaptureCanvasScreenshot();
+					if (canvasScreenshot != null)
+					{
+						var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+						encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(canvasScreenshot));
+						var canvasPath = System.IO.Path.Combine(diagDir, "projector_canvas_full.png");
+						using (var stream = new System.IO.FileStream(canvasPath, System.IO.FileMode.Create))
+						{
+							encoder.Save(stream);
+						}
+						LogToFile(logPath, "Full canvas screenshot saved: projector_canvas_full.png");
+					}
+				}
+				catch (Exception ex)
+				{
+					LogToFile(logPath, $"Failed to capture canvas screenshot: {ex.Message}");
+				}
+				
+				LogToFile(logPath, "\n=== PROJECTOR DIAGNOSTICS COMPLETE ===");
+			}
+			catch (Exception ex)
+			{
+				System.Windows.MessageBox.Show($"Projector diagnostics error: {ex.Message}");
+			}
+		}
+		
+		private System.Windows.Media.Imaging.BitmapSource CaptureCanvasScreenshot()
+		{
+			try
+			{
+				var canvas = MarkerCanvas;
+				var width = (int)canvas.ActualWidth;
+				var height = (int)canvas.ActualHeight;
+				
+				if (width <= 0 || height <= 0) return null;
+				
+				var renderTarget = new System.Windows.Media.Imaging.RenderTargetBitmap(
+					width, height, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+				renderTarget.Render(canvas);
+				
+				return renderTarget;
+			}
+			catch
+			{
+				return null;
+			}
+		}
+		
+		private void LogToFile(string path, string message)
+		{
+			try 
+			{ 
+				System.IO.File.AppendAllText(path, message + System.Environment.NewLine); 
+			} 
+			catch { }
 		}
 
 		public void HighlightMarker(int index)
