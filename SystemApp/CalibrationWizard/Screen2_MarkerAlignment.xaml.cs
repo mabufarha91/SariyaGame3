@@ -499,11 +499,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private List<PredefinedDictionaryName> BuildDictionaries()
 		{
-			// Try both 6x6 and 7x7 first (most likely), then smaller fallbacks
+			// Try both 7x7 and 6x6 first (most likely), then smaller fallbacks
 			return new List<PredefinedDictionaryName>
 			{
-				PredefinedDictionaryName.Dict6X6_250,
 				PredefinedDictionaryName.Dict7X7_250,
+				PredefinedDictionaryName.Dict6X6_250,
 				PredefinedDictionaryName.Dict4X4_50,
 				PredefinedDictionaryName.Dict5X5_100
 			};
@@ -527,6 +527,26 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			return dst;
 		}
 
+		private DetectorParameters CreateRelaxedDetectorParameters()
+		{
+			var p = new DetectorParameters();
+			// Very relaxed parameters specifically for projector-displayed markers
+			p.AdaptiveThreshWinSizeMin = 3;
+			p.AdaptiveThreshWinSizeMax = 51; // Increased from 35
+			p.AdaptiveThreshWinSizeStep = 2;
+			p.AdaptiveThreshConstant = 5; // Reduced from 7 for better contrast adaptation
+			p.MinMarkerPerimeterRate = 0.005; // Much lower minimum (was 0.01)
+			p.MaxMarkerPerimeterRate = 8.0; // Increased maximum (was 4.0)
+			p.MaxErroneousBitsInBorderRate = 0.8f; // More permissive (was 0.5)
+			p.MinCornerDistanceRate = 0.01; // Reduced from 0.02
+			p.MinDistanceToBorder = 0; // Allow markers at the very edge (was 1)
+			p.MarkerBorderBits = 1;
+			p.MinOtsuStdDev = 2.0; // Reduced from 5.0 for lower contrast tolerance
+			try { p.CornerRefinementMethod = CornerRefineMethod.Subpix; } catch { }
+			try { p.DetectInvertedMarker = true; } catch { }
+			return p;
+		}
+
 		private bool TryMinimalDictionarySweep(Mat bgr, int w, int h, out Point2f[][] outCorners, out int[] outIds, out string outDict, string logPath, string saveDir)
 		{
 			outCorners = null; outIds = null; outDict = string.Empty;
@@ -535,8 +555,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
 				var dicts = new[]
 				{
-					PredefinedDictionaryName.Dict6X6_250,
 					PredefinedDictionaryName.Dict7X7_250,
+					PredefinedDictionaryName.Dict6X6_250,
 					PredefinedDictionaryName.Dict5X5_100,
 					PredefinedDictionaryName.Dict4X4_50
 				};
@@ -551,6 +571,24 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						if (logPath != null)
 						{
 							LogToFile(logPath, $"Minimal sweep: Dict={d}, Found={(ids?.Length ?? 0)}, Rejected={(rejected?.Length ?? 0)}");
+							// Log details of rejected markers if verbose
+							if (rejected != null && rejected.Length > 0)
+							{
+								LogToFile(logPath, $"  First few rejected marker details:");
+								for (int ri = 0; ri < Math.Min(5, rejected.Length); ri++)
+								{
+									var r = rejected[ri];
+									if (r != null && r.Length >= 4)
+									{
+										var minX = r.Min(pt => pt.X);
+										var maxX = r.Max(pt => pt.X);
+										var minY = r.Min(pt => pt.Y);
+										var maxY = r.Max(pt => pt.Y);
+										var area = (maxX - minX) * (maxY - minY);
+										LogToFile(logPath, $"    Rejected {ri}: bounds=({minX:F1},{minY:F1})-({maxX:F1},{maxY:F1}), area={area:F0}");
+									}
+								}
+							}
 						}
 						if (ids != null && ids.Length > 0)
 						{
@@ -638,33 +676,60 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				{
 					var quad = corners[i];
 					if (quad == null || quad.Length < 4) continue;
-					// Geometry checks: within bounds and reasonable size
+					
+					// Basic sanity checks only - be more permissive for projector markers
+					bool validQuad = true;
 					double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
 					for (int k = 0; k < 4; k++)
 					{
-						if (double.IsNaN(quad[k].X) || double.IsNaN(quad[k].Y)) { minX = double.MaxValue; break; }
+						if (double.IsNaN(quad[k].X) || double.IsNaN(quad[k].Y)) { validQuad = false; break; }
 						if (quad[k].X < minX) minX = quad[k].X;
 						if (quad[k].Y < minY) minY = quad[k].Y;
 						if (quad[k].X > maxX) maxX = quad[k].X;
 						if (quad[k].Y > maxY) maxY = quad[k].Y;
 					}
-					if (minX == double.MaxValue) continue;
-					if (minX < 0 || minY < 0 || maxX >= width || maxY >= height) continue;
+					if (!validQuad) continue;
+					
+					// More permissive bounds check - allow markers that extend slightly outside frame
+					double margin = 50.0; // pixels
+					if (maxX < -margin || minX > width + margin || maxY < -margin || minY > height + margin) 
+					{
+						if (logPath != null) LogToFile(logPath, $"Filter: rejected marker {ids[i]} - completely outside bounds");
+						continue;
+					}
+					
+					// More permissive size checks for projector markers
 					double wpx = maxX - minX, hpx = maxY - minY;
 					double area = wpx * hpx;
-					if (area < (width * height) * 0.00002) continue; // too small
-					if (area > (width * height) * 0.25) continue; // too large
-					// Keep only minimal geometry checks to avoid rejecting true markers under heavy perspective
+					double minArea = (width * height) * 0.00001; // Smaller minimum (was 0.00002)
+					double maxArea = (width * height) * 0.5; // Larger maximum (was 0.25)
+					if (area < minArea) 
+					{
+						if (logPath != null) LogToFile(logPath, $"Filter: rejected marker {ids[i]} - too small (area={area:F0}, min={minArea:F0})");
+						continue;
+					}
+					if (area > maxArea) 
+					{
+						if (logPath != null) LogToFile(logPath, $"Filter: rejected marker {ids[i]} - too large (area={area:F0}, max={maxArea:F0})");
+						continue;
+					}
+					
+					// Very permissive perimeter check
 					double d01 = Distance(quad[0], quad[1]);
 					double d12 = Distance(quad[1], quad[2]);
 					double d23 = Distance(quad[2], quad[3]);
 					double d30 = Distance(quad[3], quad[0]);
 					double avg = (d01 + d12 + d23 + d30) / 4.0;
-					if (avg < 3.0) continue;
+					if (avg < 2.0) // Reduced from 3.0 to 2.0
+					{
+						if (logPath != null) LogToFile(logPath, $"Filter: rejected marker {ids[i]} - perimeter too small (avg={avg:F1})");
+						continue;
+					}
+					
 					int id = ids[i];
-					// Accept any ID for detection; calibration still requires 0..3
 					listCorners.Add(quad);
 					listIds.Add(id);
+					if (logPath != null) LogToFile(logPath, $"Filter: accepted marker {id} - area={area:F0}, avg_side={avg:F1}");
 				}
 			}
 			outCorners = listCorners.Count > 0 ? listCorners.ToArray() : null;
@@ -1011,14 +1076,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				// Try to load from disk if available. Prefer 6x6_250 markers, then fall back to 7x7_250
+				// Try to load from disk if available. Prefer 7x7_250 markers, then fall back to 6x6_250
 				string markersDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Markers");
 				string[] candidates = new[]
 				{
-					System.IO.Path.Combine(markersDir, $"aruco_6x6_250_id{id}.png"),
-					System.IO.Path.Combine(markersDir, $"aruco_6x6_250_id_{id}.png"),
 					System.IO.Path.Combine(markersDir, $"aruco_7x7_250_id{id}.png"),
-					System.IO.Path.Combine(markersDir, $"aruco_7x7_250_id_{id}.png")
+					System.IO.Path.Combine(markersDir, $"aruco_7x7_250_id_{id}.png"),
+					System.IO.Path.Combine(markersDir, $"aruco_6x6_250_id{id}.png"),
+					System.IO.Path.Combine(markersDir, $"aruco_6x6_250_id_{id}.png")
 				};
 				foreach (var file in candidates)
 				{
@@ -1036,19 +1101,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 			}
 			catch { }
-			// Fallback: generate a 6x6_250 marker programmatically to guarantee correct dictionary
-			try
-			{
-				using (var marker = new Mat())
-				{
-					var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict6X6_250);
-					CvAruco.DrawMarker(dict, id, size, marker, 1);
-					var bmp = marker.ToWriteableBitmap();
-					_usingRealMarkers = true;
-					return bmp;
-				}
-			}
-			catch { }
+			// Fallback generation disabled - real markers should be available in Assets and Markers folders
+			// If you need programmatic generation, install a compatible version of OpenCvSharp with ArUco support
 			return null;
 		}
 
