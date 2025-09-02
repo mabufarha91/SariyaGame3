@@ -322,7 +322,35 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					CalibrateButton.IsEnabled = HasAllMarkerIds(result.Ids);
 					NextButton.IsEnabled = HasAllMarkerIds(result.Ids);
 					MarkersOverlay.Children.Clear();
-					AddDetections(result.Corners);
+					lastDetectedCentersColor.Clear();
+					
+					// Enhanced coordinate logging for detected markers
+					if (verbose)
+					{
+						LogToFile(logPath, "\n=== COORDINATE TRANSFORMATION ANALYSIS ===");
+						LogToFile(logPath, $"Container (MarkersOverlay): {MarkersOverlay.ActualWidth:F1}x{MarkersOverlay.ActualHeight:F1}");
+						LogToFile(logPath, $"Camera resolution: 1920x1080");
+						LogToFile(logPath, $"Detected {result.Ids.Length} markers with IDs: [{string.Join(",", result.Ids)}]");
+						
+						LogToFile(logPath, "\n=== EXPECTED PROJECTOR MARKER POSITIONS ===");
+						LogToFile(logPath, "Projector markers should be at these CAMERA coordinates:");
+						LogToFile(logPath, "  - Marker 0: Should be around camera coordinates corresponding to projector position (50, 50)");
+						LogToFile(logPath, "  - Marker 1: Should be around camera coordinates corresponding to projector position (1331, 50)");
+						LogToFile(logPath, "  - Marker 2: Should be around camera coordinates corresponding to projector position (1331, 669)");
+						LogToFile(logPath, "  - Marker 3: Should be around camera coordinates corresponding to projector position (40, 669)");
+					}
+					
+					// Process each detected marker with enhanced coordinate logging
+					for (int i = 0; i < result.Corners.Length; i++)
+					{
+						int markerId = i < result.Ids.Length ? result.Ids[i] : -1;
+						AddMarkerFromQuad(result.Corners[i], markerId, verbose ? logPath : null);
+					}
+					
+					if (verbose)
+					{
+						LogToFile(logPath, "\n⚠️  NOTE: If red dots are misplaced, the camera-to-projector coordinate mapping needs calibration!");
+					}
 				}
 				else
 				{
@@ -638,12 +666,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				if (logPath != null) LogToFile(logPath, "USING PROJECTED MARKER OPTIMIZED PARAMETERS");
 				
-				// CRITICAL: Test dictionaries in order of what's actually projected
+				// CRITICAL: Back to comprehensive dictionary testing - find what works!
 				var dicts = new[] {
-					PredefinedDictionaryName.Dict7X7_250,  // What projector actually shows (from Assets)
-					PredefinedDictionaryName.Dict4X4_50,   // Detected successfully in tests
-					PredefinedDictionaryName.Dict6X6_250,  // Alternative markers
-					PredefinedDictionaryName.Dict5X5_50    // Final fallback
+					PredefinedDictionaryName.Dict7X7_250,  // What projector actually shows (PRIORITY!)
+					PredefinedDictionaryName.Dict6X6_250,  // Backup for projected markers
+					PredefinedDictionaryName.Dict4X4_50,   // Environmental markers - detect but filter spatially
+					PredefinedDictionaryName.Dict5X5_50    // Environmental markers - detect but filter spatially
 				};
 				
 				using (var gray = new Mat())
@@ -693,18 +721,18 @@ namespace KinectCalibrationWPF.CalibrationWizard
 									
 									if (ids != null && ids.Length > 0)
 									{
-										// CRITICAL: Apply spatial and ID filtering for projected markers
+										// SMART FILTERING: Remove environmental markers, keep projected ones
 										Point2f[][] filteredCorners;
 										int[] filteredIds;
 										
-										if (FilterProjectedMarkers(corners, ids, width, height, out filteredCorners, out filteredIds, logPath))
+										if (FilterEnvironmentalMarkers(corners, ids, width, height, out filteredCorners, out filteredIds, logPath))
 										{
 											outCorners = filteredCorners;
 											outIds = filteredIds;
 											
 											if (logPath != null)
 											{
-												LogToFile(logPath, $"SUCCESS: {imageName} + {dictName} found {filteredIds.Length} VALID projected markers: [{string.Join(",", filteredIds)}]");
+												LogToFile(logPath, $"SUCCESS: {imageName} + {dictName} found {filteredIds.Length} PROJECTED markers: [{string.Join(",", filteredIds)}]");
 												LogToFile(logPath, $"  (Filtered from {ids.Length} total detections: [{string.Join(",", ids)}])");
 											}
 											
@@ -727,7 +755,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 										{
 											if (logPath != null)
 											{
-												LogToFile(logPath, $"FILTERED: {imageName} + {dictName} detected {ids.Length} markers [{string.Join(",", ids)}] but NONE are in projection area");
+												LogToFile(logPath, $"FILTERED: {imageName} + {dictName} detected {ids.Length} markers [{string.Join(",", ids)}] but ALL were environmental markers");
 											}
 										}
 									}
@@ -939,112 +967,67 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			return projectorWindow;
 		}
 
-		private bool FilterProjectedMarkers(Point2f[][] corners, int[] ids, int imageWidth, int imageHeight, out Point2f[][] filteredCorners, out int[] filteredIds, string logPath)
+		private bool FilterEnvironmentalMarkers(Point2f[][] corners, int[] ids, int imageWidth, int imageHeight, out Point2f[][] filteredCorners, out int[] filteredIds, string logPath)
 		{
 			var validCorners = new List<Point2f[]>();
 			var validIds = new List<int>();
 			
 			try
 			{
-				if (logPath != null) LogToFile(logPath, "\n--- PROJECTED MARKER FILTERING ---");
+				if (logPath != null) LogToFile(logPath, "\n--- ENVIRONMENTAL MARKER FILTERING ---");
 				
-				// Get projector window bounds for spatial filtering
-				double projectorLeft = 0, projectorTop = 0, projectorRight = imageWidth, projectorBottom = imageHeight;
+				// SMART CLUSTERING: Look for markers that are grouped together (projected markers)
+				// vs isolated markers scattered around the room (environmental markers)
 				
-				var projWindow = GetProjectorWindow();
-				if (projWindow != null)
-				{
-					try
-					{
-						// Get projector window area in camera coordinates
-						// This is a rough approximation - in a real system you'd have proper coordinate mapping
-						var projWidth = projWindow.ActualWidth > 0 ? projWindow.ActualWidth : 1536;
-						var projHeight = projWindow.ActualHeight > 0 ? projWindow.ActualHeight : 864;
-						
-						// IMPROVED: Calculate projection area based on actual setup
-						// For now, assume projector area covers a central region of camera view
-						// In a calibrated system, this would use proper coordinate transformation
-						
-						// Start with 60% of camera view as projection area (conservative estimate)
-						var projAreaWidth = imageWidth * 0.6;
-						var projAreaHeight = imageHeight * 0.6;
-						
-						// Center the projection area in camera view
-						var centerX = imageWidth / 2.0;
-						var centerY = imageHeight / 2.0;
-						
-						projectorLeft = centerX - projAreaWidth / 2.0;
-						projectorRight = centerX + projAreaWidth / 2.0;
-						projectorTop = centerY - projAreaHeight / 2.0;
-						projectorBottom = centerY + projAreaHeight / 2.0;
-						
-						if (logPath != null) LogToFile(logPath, $"Projection area filter: ({projectorLeft:F0},{projectorTop:F0}) to ({projectorRight:F0},{projectorBottom:F0})");
-					}
-					catch (Exception ex)
-					{
-						if (logPath != null) LogToFile(logPath, $"Failed to get projector bounds: {ex.Message}");
-					}
-				}
-				
+				var markerCenters = new List<(Point2f center, int index, int id)>();
 				for (int i = 0; i < Math.Min(corners.Length, ids.Length); i++)
 				{
 					var corner = corners[i];
 					var id = ids[i];
 					
-					if (corner == null || corner.Length < 4)
+					if (corner != null && corner.Length >= 4)
 					{
-						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Invalid corner data");
-						continue;
+						// Calculate marker center
+						var centerX = corner.Average(p => p.X);
+						var centerY = corner.Average(p => p.Y);
+						markerCenters.Add((new Point2f(centerX, centerY), i, id));
+						
+						if (logPath != null) LogToFile(logPath, $"Marker {id} at ({centerX:F1},{centerY:F1})");
 					}
-					
-					// Calculate marker center and bounds
-					var centerX = corner.Average(p => p.X);
-					var centerY = corner.Average(p => p.Y);
-					var minX = corner.Min(p => p.X);
-					var maxX = corner.Max(p => p.X);
-					var minY = corner.Min(p => p.Y);
-					var maxY = corner.Max(p => p.Y);
-					var width = maxX - minX;
-					var height = maxY - minY;
-					
-					if (logPath != null) LogToFile(logPath, $"Marker {id}: Center=({centerX:F1},{centerY:F1}), Size={width:F1}x{height:F1}");
-					
-					// FILTER 1: Spatial bounds - must be in projection area
-					if (centerX < projectorLeft || centerX > projectorRight || centerY < projectorTop || centerY > projectorBottom)
-					{
-						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Outside projection area");
-						continue;
-					}
-					
-					// FILTER 2: Size validation - reasonable size for projected markers  
-					if (width < 20 || width > 500 || height < 20 || height > 500)
-					{
-						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Invalid size ({width:F1}x{height:F1})");
-						continue;
-					}
-					
-					// FILTER 3: Aspect ratio - should be roughly square
-					var aspectRatio = width / height;
-					if (aspectRatio < 0.5 || aspectRatio > 2.0)
-					{
-						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Invalid aspect ratio ({aspectRatio:F2})");
-						continue;
-					}
-					
-					// FILTER 4: ID validation - accept expected marker IDs (0-3) or reasonable alternatives
-					if (id < 0 || id > 100)
-					{
-						if (logPath != null) LogToFile(logPath, $"Marker {id}: REJECTED - Invalid ID range");
-						continue;
-					}
-					
-					// PASSED all filters
-					validCorners.Add(corner);
-					validIds.Add(id);
-					if (logPath != null) LogToFile(logPath, $"Marker {id}: ACCEPTED - Valid projected marker");
 				}
 				
-				if (logPath != null) LogToFile(logPath, $"FILTERING RESULT: {validIds.Count} valid markers from {ids.Length} detected");
+				if (markerCenters.Count == 0)
+				{
+					if (logPath != null) LogToFile(logPath, "No valid markers found for clustering analysis");
+				}
+				else
+				{
+					// Find the largest cluster of markers (likely the projected ones)
+					var clusteredMarkers = FindLargestMarkerCluster(markerCenters, imageWidth, imageHeight, logPath);
+					
+					if (clusteredMarkers.Count > 0)
+					{
+						if (logPath != null) LogToFile(logPath, $"Found cluster of {clusteredMarkers.Count} markers - likely projected markers");
+					}
+					else
+					{
+						if (logPath != null) LogToFile(logPath, "No clustered markers found - all appear to be environmental/scattered");
+					}
+					
+					// Use clustered markers as the filtered result
+					for (int i = 0; i < clusteredMarkers.Count; i++)
+					{
+						var marker = clusteredMarkers[i];
+						var originalIndex = marker.index;
+						
+						if (logPath != null) LogToFile(logPath, $"ACCEPTED: Marker {marker.id} at ({marker.center.X:F1},{marker.center.Y:F1}) - part of projection cluster");
+					}
+					
+					validCorners.AddRange(clusteredMarkers.Select(m => corners[m.index]));
+					validIds.AddRange(clusteredMarkers.Select(m => m.id));
+				}
+				
+				if (logPath != null) LogToFile(logPath, $"CLUSTERING RESULT: {validIds.Count} clustered markers from {ids.Length} detected");
 				
 			}
 			catch (Exception ex)
@@ -1056,6 +1039,53 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			filteredIds = validIds.ToArray();
 			
 			return filteredCorners.Length > 0;
+		}
+
+		private List<(Point2f center, int index, int id)> FindLargestMarkerCluster(List<(Point2f center, int index, int id)> markers, int imageWidth, int imageHeight, string logPath)
+		{
+			if (markers.Count <= 1) return markers;
+			
+			// Simple clustering: find markers that are close to each other
+			var clusters = new List<List<(Point2f center, int index, int id)>>();
+			var used = new bool[markers.Count];
+			
+			double clusterRadius = Math.Min(imageWidth, imageHeight) * 0.25; // 25% of image size
+			if (logPath != null) LogToFile(logPath, $"Clustering with radius: {clusterRadius:F0} pixels");
+			
+			for (int i = 0; i < markers.Count; i++)
+			{
+				if (used[i]) continue;
+				
+				var cluster = new List<(Point2f center, int index, int id)> { markers[i] };
+				used[i] = true;
+				
+				// Find all markers within cluster radius
+				for (int j = i + 1; j < markers.Count; j++)
+				{
+					if (used[j]) continue;
+					
+					double distance = Math.Sqrt(
+						Math.Pow(markers[i].center.X - markers[j].center.X, 2) + 
+						Math.Pow(markers[i].center.Y - markers[j].center.Y, 2)
+					);
+					
+					if (distance <= clusterRadius)
+					{
+						cluster.Add(markers[j]);
+						used[j] = true;
+					}
+				}
+				
+				clusters.Add(cluster);
+				if (logPath != null) LogToFile(logPath, $"Cluster {clusters.Count}: {cluster.Count} markers around ({markers[i].center.X:F0},{markers[i].center.Y:F0})");
+			}
+			
+			// Return the largest cluster (most likely the projected markers)
+			var largestCluster = clusters.OrderByDescending(c => c.Count).First();
+			if (logPath != null) LogToFile(logPath, $"Selected largest cluster with {largestCluster.Count} markers");
+			
+			// Only return cluster if it has 2+ markers (projected markers should be grouped)
+			return largestCluster.Count >= 2 ? largestCluster : new List<(Point2f center, int index, int id)>();
 		}
 
 		private bool RunOpenCvSharp4Diagnostics(string diagDir, string logPath)
@@ -1464,7 +1494,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				var quad = corners[i];
 				if (quad != null && quad.Length >= 4)
 				{
-					AddMarkerFromQuad(quad);
+					AddMarkerFromQuad(quad, -1, null); // Legacy call - no logging for now
 					// Outline the detected marker for visual confirmation
 					var pts = quad.Select(p => new System.Windows.Point(p.X, p.Y)).ToArray();
 					for (int e = 0; e < 4; e++)
@@ -1482,7 +1512,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		// removed legacy QR helper
 
-		private void AddMarkerFromQuad(Point2f[] quad)
+		private void AddMarkerFromQuad(Point2f[] quad, int markerId, string logPath)
 		{
 			// Calculate center of detected ArUco marker
 			double cx = 0, cy = 0;
@@ -1494,10 +1524,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			
 			// Transform to canvas coordinates with detailed logging
 			var colorPt = new System.Windows.Point(cx, cy);
-			var canvasPt = ColorToCanvas(colorPt);
-			
-			// Log coordinate transformation for debugging overlay alignment
-			System.Diagnostics.Debug.WriteLine($"ArUco Center: Color({cx:F1},{cy:F1}) → Canvas({canvasPt.X:F1},{canvasPt.Y:F1})");
+			var canvasPt = ColorToCanvas(colorPt, logPath, markerId);
 			
 			// Create red dot overlay with larger size for better visibility
 			var dot = new Ellipse { Width = 24, Height = 24, Fill = Brushes.Red, Stroke = Brushes.Yellow, StrokeThickness = 3 };
@@ -1505,11 +1532,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			Canvas.SetTop(dot, canvasPt.Y - 12);
 			MarkersOverlay.Children.Add(dot);
 			
-			// Add corner dots for better visualization
+			// Add corner dots for better visualization with detailed logging
+			if (logPath != null)
+			{
+				LogToFile(logPath, $"  Marker {markerId} corners in camera space:");
+				for (int i = 0; i < 4; i++)
+				{
+					LogToFile(logPath, $"    Corner {i}: ({quad[i].X:F1}, {quad[i].Y:F1})");
+				}
+			}
+			
 			for (int i = 0; i < 4; i++)
 			{
 				var cornerColorPt = new System.Windows.Point(quad[i].X, quad[i].Y);
-				var cornerCanvasPt = ColorToCanvas(cornerColorPt);
+									var cornerCanvasPt = ColorToCanvas(cornerColorPt); // Don't log each corner individually
 				var cornerDot = new Ellipse { Width = 8, Height = 8, Fill = Brushes.LimeGreen, Stroke = Brushes.Black, StrokeThickness = 1 };
 				Canvas.SetLeft(cornerDot, cornerCanvasPt.X - 4);
 				Canvas.SetTop(cornerDot, cornerCanvasPt.Y - 4);
@@ -1517,7 +1553,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
-		private System.Windows.Point ColorToCanvas(System.Windows.Point colorPoint)
+		private System.Windows.Point ColorToCanvas(System.Windows.Point colorPoint, string logPath = null, int markerId = -1)
 		{
 			// Get actual dimensions
 			double containerW = MarkersOverlay.ActualWidth;
@@ -1525,15 +1561,32 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			int colorW = (kinectManager != null && kinectManager.ColorWidth > 0) ? kinectManager.ColorWidth : 1920;
 			int colorH = (kinectManager != null && kinectManager.ColorHeight > 0) ? kinectManager.ColorHeight : 1080;
 			
-			// Debug logging for coordinate transformation issues
-			System.Diagnostics.Debug.WriteLine($"ColorToCanvas: Container={containerW:F1}x{containerH:F1}, Color={colorW}x{colorH}");
+			// Log container dimensions for debugging
+			if (logPath != null && markerId >= 0)
+			{
+				LogToFile(logPath, $"Marker {markerId} coordinate transformation:");
+				LogToFile(logPath, $"  Container (MarkersOverlay): {containerW:F1}x{containerH:F1}");
+				LogToFile(logPath, $"  Camera resolution: {colorW}x{colorH}");
+			}
 			
-			// Fallback if container not properly sized
-			if (containerW <= 0 || containerH <= 0) 
+			// Critical: Check if container is properly sized - FORCE LARGER SIZE
+			if (containerW < 400 || containerH < 300) 
 			{ 
-				containerW = 800; 
-				containerH = 600; 
-				System.Diagnostics.Debug.WriteLine($"ColorToCanvas: Using fallback container size {containerW}x{containerH}");
+				// Use camera feed size if available
+				if (CameraFeed.ActualWidth > 400 && CameraFeed.ActualHeight > 300)
+				{
+					containerW = CameraFeed.ActualWidth; 
+					containerH = CameraFeed.ActualHeight;
+				}
+				else
+				{
+					containerW = 800; 
+					containerH = 600;
+				}
+				if (logPath != null && markerId >= 0)
+				{
+					LogToFile(logPath, $"  ⚠️  FIXED: Container too small ({MarkersOverlay.ActualWidth:F1}x{MarkersOverlay.ActualHeight:F1}), using {containerW}x{containerH}");
+				}
 			}
 			
 			// Calculate scaling to fit color image in container (maintaining aspect ratio)
@@ -1551,8 +1604,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			double x = colorPoint.X * scale + offsetX;
 			double y = colorPoint.Y * scale + offsetY;
 			
-			// Debug logging for transformation details
-			System.Diagnostics.Debug.WriteLine($"ColorToCanvas: ({colorPoint.X:F1},{colorPoint.Y:F1}) → ({x:F1},{y:F1}) [scale={scale:F3}, offset=({offsetX:F1},{offsetY:F1})]");
+			// Detailed coordinate logging to file
+			if (logPath != null && markerId >= 0)
+			{
+				LogToFile(logPath, $"  Camera coordinates: ({colorPoint.X:F1}, {colorPoint.Y:F1})");
+				LogToFile(logPath, $"  Scale factor: {scale:F4} (sx={sx:F4}, sy={sy:F4})");
+				LogToFile(logPath, $"  Displayed image: {displayedW:F1}x{displayedH:F1}");
+				LogToFile(logPath, $"  Canvas offset: ({offsetX:F1}, {offsetY:F1})");
+				LogToFile(logPath, $"  Final canvas coordinates: ({x:F1}, {y:F1})");
+			}
 			
 			return new System.Windows.Point(x, y);
 		}
