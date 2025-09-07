@@ -72,24 +72,35 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			bool anyLoaded = false;
 			try
 			{
+				// Clear WPF resource cache to force reload
+				ClearResourceCache();
 				for (int i = 0; i < markers.Length; i++)
 				{
 					if (markers[i].Source != null) continue;
 					
-					// Load existing 7x7 markers (detection will handle them with ultra-permissive parameters)
+					// Load ONLY proper ArUco 4x4 markers from user's 'my' folder
 					var uris = new[]
 					{
-						$"pack://application:,,,/Assets/aruco_7x7_250_id{i}.png",
-						$"pack://application:,,,/Assets/aruco_4x4_50_id{i}.png",
-						$"pack://application:,,,/Assets/marker_{i}.png"
+						$"pack://application:,,,/Assets/my/aruco_4x4_50_id_{i}.png"
 					};
 					foreach (var uri in uris)
 					{
 						try
 						{
-							var img = new BitmapImage(new Uri(uri, UriKind.Absolute));
+							// Log which marker file we're trying to load
+							System.Diagnostics.Debug.WriteLine($"Trying to load marker {i}: {uri}");
+							
+							// Create BitmapImage with cache invalidation
+							var img = new BitmapImage();
+							img.BeginInit();
+							img.UriSource = new Uri(uri, UriKind.Absolute);
+							img.CacheOption = BitmapCacheOption.OnLoad; // Force immediate loading
+							img.EndInit();
+							img.Freeze(); // Make it thread-safe
+							
 							markers[i].Source = img;
 							anyLoaded = true;
+							System.Diagnostics.Debug.WriteLine($"Successfully loaded marker {i} from: {uri}");
 							break;
 						}
 						catch { /* try next naming */ }
@@ -152,6 +163,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						{
 							LogToFile(logPath, $"Source Size: {bitmapSource.PixelWidth}x{bitmapSource.PixelHeight}");
 							LogToFile(logPath, $"Source DPI: {bitmapSource.DpiX:F1}x{bitmapSource.DpiY:F1}");
+							LogToFile(logPath, $"Source Type: {marker.Source.GetType().Name}");
+							LogToFile(logPath, $"Source URI: {marker.Source}");
 							
 							// Save individual marker image
 							try
@@ -254,6 +267,48 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			double y = Canvas.GetTop(img);
 			Canvas.SetLeft(img, x + dx);
 			Canvas.SetTop(img, y + dy);
+		}
+		
+		public void ForceReloadMarkers()
+		{
+			try
+			{
+				// Clear all existing marker sources
+				for (int i = 0; i < markers.Length; i++)
+				{
+					markers[i].Source = null;
+				}
+				
+				// Clear cache and reload
+				ClearResourceCache();
+				LoadEmbeddedMarkerImagesIfMissing();
+				
+				System.Diagnostics.Debug.WriteLine("Forced reload of all markers");
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"Failed to force reload markers: {ex.Message}");
+			}
+		}
+		
+		private void ClearResourceCache()
+		{
+			try
+			{
+				// Clear WPF resource cache
+				System.Windows.Application.Current.Resources.Clear();
+				
+				// Force garbage collection to clear cached images
+				System.GC.Collect();
+				System.GC.WaitForPendingFinalizers();
+				System.GC.Collect();
+				
+				System.Diagnostics.Debug.WriteLine("WPF resource cache cleared");
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"Failed to clear resource cache: {ex.Message}");
+			}
 		}
 	}
 }

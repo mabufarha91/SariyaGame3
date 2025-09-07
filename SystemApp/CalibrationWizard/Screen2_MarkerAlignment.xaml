@@ -65,6 +65,9 @@
 								<StackPanel Orientation="Horizontal" Margin="0,10,0,0">
 									<Button x:Name="FindMarkersButton" Content="Find Markers" Style="{StaticResource WizardButtonStyle}" Click="FindMarkersButton_Click"/>
 								</StackPanel>
+								<StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+									<Button x:Name="TestMarker0Button" Content="🔍 Test Marker ID 0 Only" Background="#FF9800" Foreground="White" FontSize="14" Padding="20,10" Margin="5" BorderThickness="0" Click="TestMarker0Button_Click"/>
+								</StackPanel>
 								<CheckBox x:Name="EnableVerboseLogging" Content="Save detection diagnostics (recommended)" IsChecked="True" Margin="0,8,0,0"/>
 								<TextBlock x:Name="StatusText" Text="Status: Not Calibrated" Margin="0,10,0,0" Foreground="#B71C1C"/>
 							</StackPanel>

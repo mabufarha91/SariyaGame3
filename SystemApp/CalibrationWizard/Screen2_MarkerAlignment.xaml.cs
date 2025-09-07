@@ -641,6 +641,34 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			
 			try
 			{
+				// CRITICAL FIX: Mirror the image horizontally to match projected markers
+				using (var mirrored = new Mat())
+				{
+					Cv2.Flip(bgr, mirrored, FlipMode.X); // Horizontal flip (mirror)
+					
+					if (saveDir != null)
+					{
+						try { Cv2.ImWrite(System.IO.Path.Combine(saveDir, "00_mirrored_bgr.png"), mirrored); } catch { }
+					}
+					
+					// Use the mirrored image for detection
+					return TryFastArucoDetectionInternal(mirrored, width, height, out outCorners, out outIds, logPath, saveDir);
+				}
+			}
+			catch (Exception ex)
+			{
+				if (logPath != null) LogToFile(logPath, $"Projected marker detection error: {ex.Message}");
+				return false;
+			}
+		}
+		
+		private bool TryFastArucoDetectionInternal(Mat bgr, int width, int height, out Point2f[][] outCorners, out int[] outIds, string logPath, string saveDir)
+		{
+			outCorners = null;
+			outIds = null;
+			
+			try
+			{
 				// PROJECTED MARKER OPTIMIZED PARAMETERS - Very permissive for low contrast projected markers
 				var params1 = new DetectorParameters();
 				
@@ -1774,6 +1802,374 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private void ValueSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
 		{
 			_valMin = (int)e.NewValue;
+		}
+		
+		private void TestMarker0Button_Click(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				TestMarker0Button.IsEnabled = false;
+				TestMarker0Button.Content = "🔍 Testing...";
+				
+				// Run the test in a background thread to avoid blocking UI
+				Task.Run(() => {
+					try
+					{
+						PerformComprehensiveMarker0Test();
+					}
+					catch (Exception ex)
+					{
+						Dispatcher.Invoke(() => {
+							StatusText.Text = $"Test Error: {ex.Message}";
+							StatusText.Foreground = new SolidColorBrush(Colors.Red);
+						});
+					}
+					finally
+					{
+						Dispatcher.Invoke(() => {
+							TestMarker0Button.IsEnabled = true;
+							TestMarker0Button.Content = "🔍 Test Marker ID 0 Only";
+						});
+					}
+				});
+			}
+			catch (Exception ex)
+			{
+				StatusText.Text = $"Test Error: {ex.Message}";
+				StatusText.Foreground = new SolidColorBrush(Colors.Red);
+				TestMarker0Button.IsEnabled = true;
+				TestMarker0Button.Content = "🔍 Test Marker ID 0 Only";
+			}
+		}
+		
+		private void PerformComprehensiveMarker0Test()
+		{
+			try
+			{
+				Dispatcher.Invoke(() => {
+					StatusText.Text = "🔍 Starting comprehensive Marker ID 0 test...";
+					StatusText.Foreground = new SolidColorBrush(Colors.Orange);
+				});
+				
+				// Create diagnostic directory
+				var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+				var diagnosticDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics", $"Marker0Test_{timestamp}");
+				Directory.CreateDirectory(diagnosticDir);
+				
+				var logPath = System.IO.Path.Combine(diagnosticDir, "marker0_test_log.txt");
+				
+				LogToFile(logPath, "=== COMPREHENSIVE MARKER ID 0 TEST ===");
+				LogToFile(logPath, $"Test started at: {DateTime.Now}");
+				LogToFile(logPath, $"Test directory: {diagnosticDir}");
+				LogToFile(logPath, "");
+				
+				// Step 1: Test the marker file directly
+				LogToFile(logPath, "=== STEP 1: TESTING MARKER FILE DIRECTLY ===");
+				TestMarkerFileDirectly(logPath, diagnosticDir);
+				
+				// Step 2: Test OpenCV dictionary capabilities
+				LogToFile(logPath, "\n=== STEP 2: TESTING OPENCV DICTIONARY CAPABILITIES ===");
+				TestOpenCVDictionaryCapabilities(logPath);
+				
+				// Step 3: Capture camera image and test detection
+				LogToFile(logPath, "\n=== STEP 3: TESTING CAMERA CAPTURE AND DETECTION ===");
+				TestCameraCaptureAndDetection(logPath, diagnosticDir);
+				
+				LogToFile(logPath, "\n=== TEST COMPLETED ===");
+				LogToFile(logPath, $"Test completed at: {DateTime.Now}");
+				
+				Dispatcher.Invoke(() => {
+					StatusText.Text = $"✅ Marker ID 0 test completed! Check: {diagnosticDir}";
+					StatusText.Foreground = new SolidColorBrush(Colors.Green);
+				});
+			}
+			catch (Exception ex)
+			{
+				LogToFile(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics", $"Marker0Test_{DateTime.Now:yyyyMMdd_HHmmss}", "marker0_test_log.txt"), $"CRITICAL ERROR: {ex.Message}\n{ex.StackTrace}");
+				throw;
+			}
+		}
+		
+		private void TestMarkerFileDirectly(string logPath, string diagnosticDir)
+		{
+			try
+			{
+				LogToFile(logPath, "Testing marker file: Assets/my/aruco_4x4_50_id_0.png");
+				
+				var markerPath = "pack://application:,,,/Assets/my/aruco_4x4_50_id_0.png";
+				var uri = new Uri(markerPath, UriKind.Absolute);
+				var bitmap = new BitmapImage(uri);
+				
+				LogToFile(logPath, $"Marker file loaded: {bitmap.Width}x{bitmap.Height}, DPI: {bitmap.DpiX}x{bitmap.DpiY}");
+				
+				// Convert to byte array
+				var encoder = new PngBitmapEncoder();
+				encoder.Frames.Add(BitmapFrame.Create(bitmap));
+				byte[] imageBytes;
+				using (var stream = new MemoryStream())
+				{
+					encoder.Save(stream);
+					imageBytes = stream.ToArray();
+				}
+				
+				LogToFile(logPath, $"Marker file size: {imageBytes.Length} bytes");
+				
+				// Load with OpenCV
+				using (var markerMat = Cv2.ImDecode(imageBytes, ImreadModes.Color))
+				{
+					LogToFile(logPath, $"OpenCV loaded: {markerMat.Width}x{markerMat.Height}, channels: {markerMat.Channels()}, type: {markerMat.Type()}");
+					
+					// Save the loaded image for inspection
+					var loadedImagePath = System.IO.Path.Combine(diagnosticDir, "00_loaded_marker.png");
+					Cv2.ImWrite(loadedImagePath, markerMat);
+					LogToFile(logPath, $"Saved loaded marker to: {loadedImagePath}");
+					
+					// Test with Dict4X4_50
+					using (var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50))
+					using (var gray = new Mat())
+					{
+						Cv2.CvtColor(markerMat, gray, ColorConversionCodes.BGR2GRAY);
+						
+						var parameters = new DetectorParameters();
+						parameters.AdaptiveThreshWinSizeMin = 3;
+						parameters.AdaptiveThreshWinSizeMax = 23;
+						parameters.AdaptiveThreshWinSizeStep = 10;
+						parameters.AdaptiveThreshConstant = 7;
+						parameters.MinMarkerPerimeterRate = 0.01;
+						parameters.MaxMarkerPerimeterRate = 8.0;
+						parameters.PolygonalApproxAccuracyRate = 0.05;
+						parameters.MinCornerDistanceRate = 0.01;
+						parameters.MinDistanceToBorder = 1;
+						parameters.MinMarkerDistanceRate = 0.01;
+						parameters.CornerRefinementMethod = CornerRefineMethod.Subpix;
+						parameters.CornerRefinementWinSize = 5;
+						parameters.CornerRefinementMaxIterations = 30;
+						parameters.CornerRefinementMinAccuracy = 0.1;
+						parameters.MarkerBorderBits = 1;
+						parameters.PerspectiveRemovePixelPerCell = 4;
+						parameters.PerspectiveRemoveIgnoredMarginPerCell = 0.13;
+						parameters.MaxErroneousBitsInBorderRate = 0.5;
+						parameters.MinOtsuStdDev = 2.0;
+						parameters.ErrorCorrectionRate = 0.3;
+						
+						Point2f[][] corners; int[] ids; Point2f[][] rejected;
+						CvAruco.DetectMarkers(gray, dict, out corners, out ids, parameters, out rejected);
+						
+						if (ids != null && ids.Length > 0)
+						{
+							LogToFile(logPath, $"✅ DETECTED: ID {ids[0]} (rejected: {rejected?.Length ?? 0})");
+							
+							// Save detection result
+							using (var result = markerMat.Clone())
+							{
+								CvAruco.DrawDetectedMarkers(result, corners, ids);
+								var resultPath = System.IO.Path.Combine(diagnosticDir, "detected_marker_0.png");
+								Cv2.ImWrite(resultPath, result);
+								LogToFile(logPath, $"Saved detection result to: {resultPath}");
+							}
+						}
+						else
+						{
+							LogToFile(logPath, $"❌ NOT DETECTED (rejected: {rejected?.Length ?? 0})");
+						}
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(logPath, $"ERROR in TestMarkerFileDirectly: {ex.Message}");
+			}
+		}
+		
+		private void TestOpenCVDictionaryCapabilities(string logPath)
+		{
+			try
+			{
+				LogToFile(logPath, "Testing OpenCV ArUco dictionary capabilities...");
+				
+				// Test all available dictionaries
+				var allDictionaries = new[]
+				{
+					PredefinedDictionaryName.Dict4X4_50,
+					PredefinedDictionaryName.Dict4X4_100,
+					PredefinedDictionaryName.Dict4X4_250,
+					PredefinedDictionaryName.Dict4X4_1000,
+					PredefinedDictionaryName.Dict5X5_50,
+					PredefinedDictionaryName.Dict5X5_100,
+					PredefinedDictionaryName.Dict5X5_250,
+					PredefinedDictionaryName.Dict5X5_1000,
+					PredefinedDictionaryName.Dict6X6_50,
+					PredefinedDictionaryName.Dict6X6_100,
+					PredefinedDictionaryName.Dict6X6_250,
+					PredefinedDictionaryName.Dict6X6_1000,
+					PredefinedDictionaryName.Dict7X7_50,
+					PredefinedDictionaryName.Dict7X7_100,
+					PredefinedDictionaryName.Dict7X7_250,
+					PredefinedDictionaryName.Dict7X7_1000
+				};
+				
+				foreach (var dictName in allDictionaries)
+				{
+					try
+					{
+						using (var dict = CvAruco.GetPredefinedDictionary(dictName))
+						{
+							LogToFile(logPath, $"✅ {dictName}: Available (size: {dict.MarkerSize})");
+						}
+					}
+					catch (Exception ex)
+					{
+						LogToFile(logPath, $"❌ {dictName}: Error - {ex.Message}");
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(logPath, $"ERROR in TestOpenCVDictionaryCapabilities: {ex.Message}");
+			}
+		}
+		
+		private void TestCameraCaptureAndDetection(string logPath, string diagnosticDir)
+		{
+			try
+			{
+				LogToFile(logPath, "Testing camera capture and detection...");
+				
+				if (kinectManager == null)
+				{
+					LogToFile(logPath, "❌ KinectManager is null - cannot capture camera image");
+					return;
+				}
+				
+				// Capture current camera frame
+				byte[] colorData;
+				int width, height, stride;
+				if (!kinectManager.TryGetColorFrameRaw(out colorData, out width, out height, out stride))
+				{
+					LogToFile(logPath, "❌ No color frame available from Kinect");
+					return;
+				}
+				
+				LogToFile(logPath, $"Captured color frame: {width}x{height}, stride: {stride}");
+				
+				// Convert to OpenCV Mat using a simpler approach
+				using (var bgr = new Mat(height, width, MatType.CV_8UC3))
+				{
+					// Copy data manually
+					for (int y = 0; y < height; y++)
+					{
+						for (int x = 0; x < width; x++)
+						{
+							int srcIndex = y * stride + x * 4; // BGRA format
+							int dstIndex = y * width * 3 + x * 3; // BGR format
+							
+							if (srcIndex + 2 < colorData.Length && dstIndex + 2 < bgr.Total() * 3)
+							{
+								bgr.Set(y, x, new Vec3b(colorData[srcIndex], colorData[srcIndex + 1], colorData[srcIndex + 2]));
+							}
+						}
+					}
+					
+					// Save original image
+					var originalPath = System.IO.Path.Combine(diagnosticDir, "01_camera_original.png");
+					Cv2.ImWrite(originalPath, bgr);
+					LogToFile(logPath, $"Saved original camera image to: {originalPath}");
+					
+					// CRITICAL FIX: Mirror the image horizontally to match projected markers
+					using (var mirrored = new Mat())
+					{
+						Cv2.Flip(bgr, mirrored, FlipMode.X); // Horizontal flip (mirror)
+						
+						// Save mirrored image
+						var mirroredPath = System.IO.Path.Combine(diagnosticDir, "01_camera_mirrored.png");
+						Cv2.ImWrite(mirroredPath, mirrored);
+						LogToFile(logPath, $"Saved mirrored camera image to: {mirroredPath}");
+						
+						// Test detection on mirrored image (this should work!)
+						TestDetectionOnImage(mirrored, "Mirrored Camera Image", logPath, diagnosticDir);
+					}
+					
+					// Also test original for comparison
+					TestDetectionOnImage(bgr, "Original Camera Image", logPath, diagnosticDir);
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(logPath, $"ERROR in TestCameraCaptureAndDetection: {ex.Message}");
+			}
+		}
+		
+		private void TestDetectionOnImage(Mat image, string imageName, string logPath, string diagnosticDir)
+		{
+			try
+			{
+				LogToFile(logPath, $"\n--- Testing detection on {imageName} ---");
+				LogToFile(logPath, $"Image: {image.Width}x{image.Height}, channels: {image.Channels()}, type: {image.Type()}");
+				
+				using (var gray = new Mat())
+				{
+					Cv2.CvtColor(image, gray, ColorConversionCodes.BGR2GRAY);
+					
+					// Test with Dict4X4_50 only (our target)
+					using (var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50))
+					{
+						var parameters = new DetectorParameters();
+						parameters.AdaptiveThreshWinSizeMin = 3;
+						parameters.AdaptiveThreshWinSizeMax = 23;
+						parameters.AdaptiveThreshWinSizeStep = 10;
+						parameters.AdaptiveThreshConstant = 7;
+						parameters.MinMarkerPerimeterRate = 0.01;
+						parameters.MaxMarkerPerimeterRate = 8.0;
+						parameters.PolygonalApproxAccuracyRate = 0.05;
+						parameters.MinCornerDistanceRate = 0.01;
+						parameters.MinDistanceToBorder = 1;
+						parameters.MinMarkerDistanceRate = 0.01;
+						parameters.CornerRefinementMethod = CornerRefineMethod.Subpix;
+						parameters.CornerRefinementWinSize = 5;
+						parameters.CornerRefinementMaxIterations = 30;
+						parameters.CornerRefinementMinAccuracy = 0.1;
+						parameters.MarkerBorderBits = 1;
+						parameters.PerspectiveRemovePixelPerCell = 4;
+						parameters.PerspectiveRemoveIgnoredMarginPerCell = 0.13;
+						parameters.MaxErroneousBitsInBorderRate = 0.5;
+						parameters.MinOtsuStdDev = 2.0;
+						parameters.ErrorCorrectionRate = 0.3;
+						
+						Point2f[][] corners; int[] ids; Point2f[][] rejected;
+						CvAruco.DetectMarkers(gray, dict, out corners, out ids, parameters, out rejected);
+						
+						LogToFile(logPath, $"Detection results:");
+						LogToFile(logPath, $"  Found: {ids?.Length ?? 0} markers");
+						LogToFile(logPath, $"  Rejected: {rejected?.Length ?? 0} candidates");
+						
+						if (ids != null && ids.Length > 0)
+						{
+							LogToFile(logPath, $"  Detected IDs: [{string.Join(", ", ids)}]");
+							
+							// Check if ID 0 is detected
+							bool foundId0 = ids.Contains(0);
+							LogToFile(logPath, $"  Found ID 0: {(foundId0 ? "✅ YES" : "❌ NO")}");
+							
+							// Save detection result
+							using (var result = image.Clone())
+							{
+								CvAruco.DrawDetectedMarkers(result, corners, ids);
+								var resultPath = System.IO.Path.Combine(diagnosticDir, $"02_detection_{imageName.Replace(" ", "_")}.png");
+								Cv2.ImWrite(resultPath, result);
+								LogToFile(logPath, $"  Saved detection result to: {resultPath}");
+							}
+						}
+						else
+						{
+							LogToFile(logPath, "  ❌ No markers detected");
+						}
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(logPath, $"ERROR in TestDetectionOnImage: {ex.Message}");
+			}
 		}
 	}
 }
