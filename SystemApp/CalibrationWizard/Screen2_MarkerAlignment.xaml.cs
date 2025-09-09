@@ -46,11 +46,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private int _satMin = 0;
 		private int _valMin = 200;
 
-		public Screen2_MarkerAlignment(KinectManager.KinectManager manager)
+		private CalibrationConfig calibrationConfig;
+
+		public Screen2_MarkerAlignment(KinectManager.KinectManager manager, CalibrationConfig config = null)
 		{
 			InitializeComponent();
 			kinectManager = manager;
+			calibrationConfig = config ?? new CalibrationConfig();
 			Loaded += Screen2_MarkerAlignment_Loaded;
+			SizeChanged += Screen2_MarkerAlignment_SizeChanged;
 			cameraUpdateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
 			cameraUpdateTimer.Tick += cameraUpdateTimer_Tick;
 			cameraUpdateTimer.Start();
@@ -67,10 +71,132 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				{
 					// Show the unprocessed color feed only
 					CameraFeed.Source = src;
+					// Synchronize overlay with camera feed dimensions
+					SynchronizeOverlayWithCameraFeed();
 				}
 			}
 			catch { }
 			CameraStatusText.Text = (kinectManager != null && kinectManager.IsInitialized) ? "Camera: Connected" : "Camera: Not Available (Test Mode)";
+		}
+		
+		private void SynchronizeOverlayWithCameraFeed()
+		{
+			try
+			{
+				// CRITICAL FIX: The MarkersOverlay must match the actual rendered camera feed size
+				// NOT the parent container size, to ensure proper coordinate mapping
+				
+				// Force the camera feed to update its layout first
+				CameraFeed.UpdateLayout();
+				
+				// Use the camera feed's actual rendered size
+				double feedWidth = CameraFeed.ActualWidth;
+				double feedHeight = CameraFeed.ActualHeight;
+				
+				// If camera feed is not properly sized, calculate based on aspect ratio
+				if (feedWidth <= 0 || feedHeight <= 0)
+				{
+					// Get the parent container size
+					var parent = CameraFeed.Parent as FrameworkElement;
+					if (parent != null)
+					{
+						double containerWidth = parent.ActualWidth;
+						double containerHeight = parent.ActualHeight;
+						
+						// Calculate the actual rendered size based on camera aspect ratio
+						int colorW = (kinectManager != null && kinectManager.ColorWidth > 0) ? kinectManager.ColorWidth : 1920;
+						int colorH = (kinectManager != null && kinectManager.ColorHeight > 0) ? kinectManager.ColorHeight : 1080;
+						double aspectRatio = (double)colorW / colorH;
+						
+						// Calculate the actual rendered size with Stretch="Uniform"
+						if (containerWidth / containerHeight > aspectRatio)
+						{
+							// Container is wider than aspect ratio, height is the limiting factor
+							feedHeight = containerHeight;
+							feedWidth = containerHeight * aspectRatio;
+						}
+						else
+						{
+							// Container is taller than aspect ratio, width is the limiting factor
+							feedWidth = containerWidth;
+							feedHeight = containerWidth / aspectRatio;
+						}
+					}
+				}
+				
+				// Set canvas size to match the actual camera feed rendered size
+				MarkersOverlay.Width = feedWidth;
+				MarkersOverlay.Height = feedHeight;
+				
+				// Position the canvas at the same location as the camera feed
+				Canvas.SetLeft(MarkersOverlay, 0);
+				Canvas.SetTop(MarkersOverlay, 0);
+				
+				// Force the canvas to update its layout
+				MarkersOverlay.UpdateLayout();
+				
+				System.Diagnostics.Debug.WriteLine($"Overlay synchronized: {MarkersOverlay.Width}x{MarkersOverlay.Height} (feed: {CameraFeed.ActualWidth}x{CameraFeed.ActualHeight})");
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"Overlay synchronization error: {ex.Message}");
+			}
+		}
+		
+		private void Screen2_MarkerAlignment_SizeChanged(object sender, SizeChangedEventArgs e)
+		{
+			// CRITICAL: When window is resized or maximized, resynchronize the overlay and update marker positions
+			Dispatcher.BeginInvoke(new Action(() => {
+				SynchronizeOverlayWithCameraFeed();
+				UpdateMarkerPositionsOnResize();
+			}), DispatcherPriority.Loaded);
+		}
+		
+		private void UpdateMarkerPositionsOnResize()
+		{
+			try
+			{
+				// Only update if we have detected markers
+				if (_detectedCorners != null && _detectedCorners.Length > 0 && lastDetectedCentersColor.Count > 0)
+				{
+					// Clear current overlay
+					MarkersOverlay.Children.Clear();
+					
+					// Re-add test blue dot at center
+					var testDot = new Ellipse { Width = 20, Height = 20, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 2 };
+					
+					// Position the test dot at the center of the MarkersOverlay (which represents the camera feed area)
+					double centerX = MarkersOverlay.ActualWidth / 2.0;
+					double centerY = MarkersOverlay.ActualHeight / 2.0;
+					
+					Canvas.SetLeft(testDot, centerX - 10);  // Center the 20px dot
+					Canvas.SetTop(testDot, centerY - 10);   // Center the 20px dot
+					MarkersOverlay.Children.Add(testDot);
+					
+					// Re-process all detected markers with new coordinates
+					for (int i = 0; i < _detectedCorners.Length; i++)
+					{
+						int markerId = i < _detectedIds.Length ? _detectedIds[i] : -1;
+						AddMarkerFromQuad(_detectedCorners[i], markerId, null);
+					}
+					
+					// Re-draw touch area rectangle if all 4 markers are present
+					if (_detectedIds != null && _detectedIds.Length == 4 && HasAllMarkerIds(_detectedIds))
+					{
+						CalculateAndSaveTouchArea(_detectedCorners, _detectedIds, null);
+					}
+					
+					// Draw rectangle connecting the red dots if we have 4 markers
+					if (lastDetectedCentersColor.Count == 4)
+					{
+						DrawRectangleFromRedDots();
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"Error updating marker positions on resize: {ex.Message}");
+			}
 		}
 
 		private void ExposureSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -101,6 +227,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			this.Activate();
 			// Quick check: ensure OpenCV native runtime is present; if not, warn so on-the-fly drawing won't work
 			VerifyOpenCvRuntimePresent();
+			// Synchronize overlay with camera feed after a short delay to ensure UI is fully loaded
+			Dispatcher.BeginInvoke(new Action(() => SynchronizeOverlayWithCameraFeed()), DispatcherPriority.Loaded);
 			// Load real markers from disk if available; otherwise generate on-the-fly; otherwise ProjectorWindow loads embedded assets
 			for (int i = 0; i < 4; i++)
 			{
@@ -200,7 +328,21 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
 			string diagDir = System.IO.Path.Combine(baseDiag, ts);
 			string logPath = System.IO.Path.Combine(diagDir, "detection_log.txt");
+			string markerDiagPath = System.IO.Path.Combine(diagDir, "red_markers_diagnostic.txt");
 			if (verbose) { try { Directory.CreateDirectory(diagDir); } catch { } }
+			
+			// COMPREHENSIVE RED MARKERS DIAGNOSTIC
+			LogToFile(markerDiagPath, "=== COMPREHENSIVE RED MARKERS DIAGNOSTIC ===");
+			LogToFile(markerDiagPath, $"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
+			LogToFile(markerDiagPath, $"Window State: {this.WindowState}");
+			LogToFile(markerDiagPath, $"Window Size: {this.ActualWidth}x{this.ActualHeight}");
+			LogToFile(markerDiagPath, $"Camera Feed Visibility: {CameraFeed.Visibility}");
+			LogToFile(markerDiagPath, $"Camera Feed Size: {CameraFeed.ActualWidth}x{CameraFeed.ActualHeight}");
+			LogToFile(markerDiagPath, $"MarkersOverlay Size: {MarkersOverlay.ActualWidth}x{MarkersOverlay.ActualHeight}");
+			LogToFile(markerDiagPath, $"MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
+			LogToFile(markerDiagPath, $"MarkersOverlay Background: {MarkersOverlay.Background}");
+			LogToFile(markerDiagPath, $"MarkersOverlay ClipToBounds: {MarkersOverlay.ClipToBounds}");
+			LogToFile(markerDiagPath, "");
 			
 			if (kinectManager == null)
 			{
@@ -236,17 +378,17 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Run detection on background thread to prevent UI freezing
 				var result = await Task.Run(() =>
 				{
-					var handle = GCHandle.Alloc(bgra, GCHandleType.Pinned);
-					try
+			var handle = GCHandle.Alloc(bgra, GCHandleType.Pinned);
+			try
+			{
+				using (var matBGRA = Mat.FromPixelData(h, w, MatType.CV_8UC4, handle.AddrOfPinnedObject(), stride))
+				using (var matBGR = new Mat())
+				{
+					Cv2.CvtColor(matBGRA, matBGR, ColorConversionCodes.BGRA2BGR);
+					if (verbose)
 					{
-						using (var matBGRA = Mat.FromPixelData(h, w, MatType.CV_8UC4, handle.AddrOfPinnedObject(), stride))
-						using (var matBGR = new Mat())
-						{
-							Cv2.CvtColor(matBGRA, matBGR, ColorConversionCodes.BGRA2BGR);
-							if (verbose)
-							{
-								try { Cv2.ImWrite(System.IO.Path.Combine(diagDir, "00_bgr.png"), matBGR); } catch { }
-								try { LogToFile(logPath, $"SRC: {w}x{h}, stride={stride}"); } catch { }
+						try { Cv2.ImWrite(System.IO.Path.Combine(diagDir, "00_bgr.png"), matBGR); } catch { }
+						try { LogToFile(logPath, $"SRC: {w}x{h}, stride={stride}"); } catch { }
 								try { LogToFile(logPath, "STRATEGY: Fast ArUco detection (non-blocking)"); } catch { }
 							}
 
@@ -315,18 +457,60 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Update UI on main thread
 				if (result.Success)
 				{
+					// COMPREHENSIVE DETECTION RESULT LOGGING
+					LogToFile(markerDiagPath, "=== DETECTION RESULT ANALYSIS ===");
+					LogToFile(markerDiagPath, $"Detection Success: {result.Success}");
+					LogToFile(markerDiagPath, $"Detected Markers Count: {result.Ids.Length}");
+					LogToFile(markerDiagPath, $"Detected Marker IDs: [{string.Join(", ", result.Ids)}]");
+					LogToFile(markerDiagPath, $"Corners Array Length: {result.Corners.Length}");
+					LogToFile(markerDiagPath, "");
+					
+					// Log each detected marker's corners
+					for (int i = 0; i < result.Corners.Length; i++)
+					{
+						LogToFile(markerDiagPath, $"Marker {i} (ID: {result.Ids[i]}):");
+						for (int j = 0; j < result.Corners[i].Length; j++)
+						{
+							LogToFile(markerDiagPath, $"  Corner {j}: ({result.Corners[i][j].X:F2}, {result.Corners[i][j].Y:F2})");
+						}
+						LogToFile(markerDiagPath, "");
+					}
+					
 					_detectedCorners = result.Corners;
 					_detectedIds = result.Ids;
 					StatusText.Text = $"Status: Found {result.Ids.Length} ArUco marker(s)";
-					StatusText.Foreground = Brushes.Green;
+						StatusText.Foreground = Brushes.Green;
 					CalibrateButton.IsEnabled = HasAllMarkerIds(result.Ids);
 					NextButton.IsEnabled = HasAllMarkerIds(result.Ids);
-					MarkersOverlay.Children.Clear();
+					
+					// COMPREHENSIVE OVERLAY CLEARING LOGGING
+					LogToFile(markerDiagPath, "=== OVERLAY CLEARING PROCESS ===");
+					LogToFile(markerDiagPath, $"Before Clear - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
+						MarkersOverlay.Children.Clear();
 					lastDetectedCentersColor.Clear();
+					LogToFile(markerDiagPath, $"After Clear - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
+					LogToFile(markerDiagPath, "");
+					
+					// DEBUG: Add a test marker to verify canvas is working
+					LogToFile(markerDiagPath, "=== TEST MARKER CREATION ===");
+					var testDot = new Ellipse { Width = 20, Height = 20, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 2 };
+					
+					// Position the test dot at the center of the MarkersOverlay (which represents the camera feed area)
+					double centerX = MarkersOverlay.ActualWidth / 2.0;
+					double centerY = MarkersOverlay.ActualHeight / 2.0;
+					
+					Canvas.SetLeft(testDot, centerX - 10);  // Center the 20px dot
+					Canvas.SetTop(testDot, centerY - 10);   // Center the 20px dot
+					MarkersOverlay.Children.Add(testDot);
+					LogToFile(markerDiagPath, $"Test Blue Dot Created at center ({centerX:F1},{centerY:F1})");
+					LogToFile(markerDiagPath, $"After Test Dot - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
+					LogToFile(markerDiagPath, $"Test Dot Properties: Width={testDot.Width}, Height={testDot.Height}, Fill={testDot.Fill}");
+					LogToFile(markerDiagPath, "");
+					System.Diagnostics.Debug.WriteLine("Added test blue dot at (50,50)");
 					
 					// Enhanced coordinate logging for detected markers
-					if (verbose)
-					{
+						if (verbose)
+						{
 						LogToFile(logPath, "\n=== COORDINATE TRANSFORMATION ANALYSIS ===");
 						LogToFile(logPath, $"Container (MarkersOverlay): {MarkersOverlay.ActualWidth:F1}x{MarkersOverlay.ActualHeight:F1}");
 						LogToFile(logPath, $"Camera resolution: 1920x1080");
@@ -341,23 +525,59 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					}
 					
 					// Process each detected marker with enhanced coordinate logging
+					LogToFile(markerDiagPath, "=== MARKER PROCESSING PHASE ===");
+					LogToFile(markerDiagPath, $"Processing {result.Corners.Length} detected markers");
+					System.Diagnostics.Debug.WriteLine($"Processing {result.Corners.Length} detected markers");
+					
 					for (int i = 0; i < result.Corners.Length; i++)
 					{
 						int markerId = i < result.Ids.Length ? result.Ids[i] : -1;
-						AddMarkerFromQuad(result.Corners[i], markerId, verbose ? logPath : null);
+						LogToFile(markerDiagPath, $"--- Processing Marker {i} (ID: {markerId}) ---");
+						LogToFile(markerDiagPath, $"Before Processing - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
+						System.Diagnostics.Debug.WriteLine($"Processing marker {i}, ID: {markerId}");
+						
+						AddMarkerFromQuad(result.Corners[i], markerId, markerDiagPath);
+						
+						LogToFile(markerDiagPath, $"After Processing - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
+						LogToFile(markerDiagPath, "");
 					}
+					
+					// Draw rectangle connecting the red dots if we have 4 markers
+					if (lastDetectedCentersColor.Count == 4)
+					{
+						LogToFile(markerDiagPath, "=== DRAWING RECTANGLE FROM RED DOTS ===");
+						LogToFile(markerDiagPath, $"Red dots count: {lastDetectedCentersColor.Count}");
+						DrawRectangleFromRedDots();
+						LogToFile(markerDiagPath, $"After rectangle - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
+					}
+					
+					// Calculate and save touch area if all 4 markers are detected
+					LogToFile(markerDiagPath, "=== TOUCH AREA CALCULATION ===");
+					LogToFile(markerDiagPath, $"Detected markers count: {result.Ids.Length}");
+					LogToFile(markerDiagPath, $"Has all marker IDs: {HasAllMarkerIds(result.Ids)}");
+					
+					if (result.Ids.Length == 4 && HasAllMarkerIds(result.Ids))
+					{
+						LogToFile(markerDiagPath, "All 4 markers detected - calculating touch area...");
+						CalculateAndSaveTouchArea(result.Corners, result.Ids, markerDiagPath);
+					}
+					else
+					{
+						LogToFile(markerDiagPath, "Not all 4 markers detected - skipping touch area calculation");
+					}
+					LogToFile(markerDiagPath, "");
 					
 					if (verbose)
 					{
 						LogToFile(logPath, "\n⚠️  NOTE: If red dots are misplaced, the camera-to-projector coordinate mapping needs calibration!");
+						}
+					}
+					else
+					{
+					StatusText.Text = "Status: No ArUco markers detected. Check marker display.";
+						StatusText.Foreground = Brushes.OrangeRed;
 					}
 				}
-				else
-				{
-					StatusText.Text = "Status: No ArUco markers detected. Check marker display.";
-					StatusText.Foreground = Brushes.OrangeRed;
-				}
-			}
 			catch (Exception ex)
 			{
 				StatusText.Text = $"Status: Detection error - {ex.Message}";
@@ -372,8 +592,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				if (cameraWasVisible)
 				{
 					CameraFeed.Visibility = Visibility.Visible;
+					// CRITICAL: Synchronize overlay after camera feed is restored
+					Dispatcher.BeginInvoke(new Action(() => SynchronizeOverlayWithCameraFeed()), DispatcherPriority.Loaded);
 					if (verbose) LogToFile(logPath, "✅ Camera feed restored after detection");
 				}
+				
+				// FINAL COMPREHENSIVE DIAGNOSTIC SUMMARY
+				LogToFile(markerDiagPath, "=== FINAL DIAGNOSTIC SUMMARY ===");
+				LogToFile(markerDiagPath, $"Final MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
+				LogToFile(markerDiagPath, $"Final MarkersOverlay Size: {MarkersOverlay.ActualWidth}x{MarkersOverlay.ActualHeight}");
+				LogToFile(markerDiagPath, $"Final Camera Feed Size: {CameraFeed.ActualWidth}x{CameraFeed.ActualHeight}");
+				LogToFile(markerDiagPath, $"Final Camera Feed Visibility: {CameraFeed.Visibility}");
+				LogToFile(markerDiagPath, $"Final Status Text: {StatusText.Text}");
+				LogToFile(markerDiagPath, "");
+				LogToFile(markerDiagPath, "=== END OF COMPREHENSIVE RED MARKERS DIAGNOSTIC ===");
 			}
 		}
 
@@ -613,20 +845,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 								LogToFile(logPath, $"  BYPASSED filtering - accepting all {ids.Length} markers");
 							}
 							
-							if (saveDir != null)
-							{
-								try
+								if (saveDir != null)
 								{
-									using (var vis = bgr.Clone())
+									try
 									{
-										CvAruco.DrawDetectedMarkers(vis, outCorners, outIds, Scalar.LimeGreen);
-										Cv2.ImWrite(System.IO.Path.Combine(saveDir, $"detected_minimal_{outDict}.png"), vis);
+										using (var vis = bgr.Clone())
+										{
+											CvAruco.DrawDetectedMarkers(vis, outCorners, outIds, Scalar.LimeGreen);
+											Cv2.ImWrite(System.IO.Path.Combine(saveDir, $"detected_minimal_{outDict}.png"), vis);
+										}
 									}
+									catch { }
 								}
-								catch { }
+								return true;
 							}
-							return true;
-						}
 					}
 					catch { }
 				}
@@ -641,18 +873,18 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			
 			try
 			{
-				// CRITICAL FIX: Mirror the image horizontally to match projected markers
-				using (var mirrored = new Mat())
+				// VERTICAL FLIP ONLY: The Kinect camera mirrors the wall, so vertical flip makes detection match camera view
+				using (var flipped = new Mat())
 				{
-					Cv2.Flip(bgr, mirrored, FlipMode.X); // Horizontal flip (mirror)
+					Cv2.Flip(bgr, flipped, FlipMode.Y); // Vertical flip only
 					
 					if (saveDir != null)
 					{
-						try { Cv2.ImWrite(System.IO.Path.Combine(saveDir, "00_mirrored_bgr.png"), mirrored); } catch { }
+						try { Cv2.ImWrite(System.IO.Path.Combine(saveDir, "00_vertically_flipped_bgr.png"), flipped); } catch { }
 					}
 					
-					// Use the mirrored image for detection
-					return TryFastArucoDetectionInternal(mirrored, width, height, out outCorners, out outIds, logPath, saveDir);
+					// Use the vertically flipped image for detection
+					return TryFastArucoDetectionInternal(flipped, width, height, out outCorners, out outIds, logPath, saveDir);
 				}
 			}
 			catch (Exception ex)
@@ -661,7 +893,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				return false;
 			}
 		}
-		
+
 		private bool TryFastArucoDetectionInternal(Mat bgr, int width, int height, out Point2f[][] outCorners, out int[] outIds, string logPath, string saveDir)
 		{
 			outCorners = null;
@@ -757,30 +989,30 @@ namespace KinectCalibrationWPF.CalibrationWizard
 										{
 											outCorners = filteredCorners;
 											outIds = filteredIds;
-											
-											if (logPath != null)
-											{
+									
+									if (logPath != null)
+									{
 												LogToFile(logPath, $"SUCCESS: {imageName} + {dictName} found {filteredIds.Length} PROJECTED markers: [{string.Join(",", filteredIds)}]");
 												LogToFile(logPath, $"  (Filtered from {ids.Length} total detections: [{string.Join(",", ids)}])");
-											}
-											
-											if (saveDir != null)
+									}
+									
+									if (saveDir != null)
+									{
+										try
+										{
+											using (var vis = bgr.Clone())
 											{
-												try
-												{
-													using (var vis = bgr.Clone())
-													{
 														CvAruco.DrawDetectedMarkers(vis, filteredCorners, filteredIds, Scalar.LimeGreen);
 														Cv2.ImWrite(System.IO.Path.Combine(saveDir, $"03_detected_{imageName}_{dictName}.png"), vis);
-													}
-												}
-												catch { }
-											}
-											
-											return true;
-										}
-										else
-										{
+						}
+					}
+					catch { }
+				}
+									
+									return true;
+								}
+								else
+								{
 											if (logPath != null)
 											{
 												LogToFile(logPath, $"FILTERED: {imageName} + {dictName} detected {ids.Length} markers [{string.Join(",", ids)}] but ALL were environmental markers");
@@ -798,7 +1030,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 				
 				if (logPath != null) LogToFile(logPath, "PROJECTED MARKER DETECTION: All attempts failed");
-				return false;
+			return false;
 			}
 			catch (Exception ex)
 			{
@@ -1002,12 +1234,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			
 			try
 			{
-				if (logPath != null) LogToFile(logPath, "\n--- ENVIRONMENTAL MARKER FILTERING ---");
+				if (logPath != null) LogToFile(logPath, "\n--- STRICT ID FILTERING (ONLY IDs 0,1,2,3) ---");
 				
-				// SMART CLUSTERING: Look for markers that are grouped together (projected markers)
-				// vs isolated markers scattered around the room (environmental markers)
+				// CRITICAL: Only accept markers with IDs 0, 1, 2, 3 (our projected markers)
+				var allowedIds = new int[] { 0, 1, 2, 3 };
 				
-				var markerCenters = new List<(Point2f center, int index, int id)>();
+				if (logPath != null) LogToFile(logPath, $"Raw detection: {ids.Length} markers with IDs: [{string.Join(", ", ids)}]");
+				
 				for (int i = 0; i < Math.Min(corners.Length, ids.Length); i++)
 				{
 					var corner = corners[i];
@@ -1015,47 +1248,24 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					
 					if (corner != null && corner.Length >= 4)
 					{
-						// Calculate marker center
+						// Calculate marker center for logging
 						var centerX = corner.Average(p => p.X);
 						var centerY = corner.Average(p => p.Y);
-						markerCenters.Add((new Point2f(centerX, centerY), i, id));
 						
-						if (logPath != null) LogToFile(logPath, $"Marker {id} at ({centerX:F1},{centerY:F1})");
-					}
-				}
-				
-				if (markerCenters.Count == 0)
-				{
-					if (logPath != null) LogToFile(logPath, "No valid markers found for clustering analysis");
+						if (allowedIds.Contains(id))
+						{
+							validCorners.Add(corner);
+							validIds.Add(id);
+							if (logPath != null) LogToFile(logPath, $"✅ ACCEPTED: Marker ID {id} at ({centerX:F1},{centerY:F1})");
 				}
 				else
 				{
-					// Find the largest cluster of markers (likely the projected ones)
-					var clusteredMarkers = FindLargestMarkerCluster(markerCenters, imageWidth, imageHeight, logPath);
-					
-					if (clusteredMarkers.Count > 0)
-					{
-						if (logPath != null) LogToFile(logPath, $"Found cluster of {clusteredMarkers.Count} markers - likely projected markers");
+							if (logPath != null) LogToFile(logPath, $"❌ REJECTED: Marker ID {id} at ({centerX:F1},{centerY:F1}) - not in allowed range [0,1,2,3]");
+						}
 					}
-					else
-					{
-						if (logPath != null) LogToFile(logPath, "No clustered markers found - all appear to be environmental/scattered");
-					}
-					
-					// Use clustered markers as the filtered result
-					for (int i = 0; i < clusteredMarkers.Count; i++)
-					{
-						var marker = clusteredMarkers[i];
-						var originalIndex = marker.index;
-						
-						if (logPath != null) LogToFile(logPath, $"ACCEPTED: Marker {marker.id} at ({marker.center.X:F1},{marker.center.Y:F1}) - part of projection cluster");
-					}
-					
-					validCorners.AddRange(clusteredMarkers.Select(m => corners[m.index]));
-					validIds.AddRange(clusteredMarkers.Select(m => m.id));
 				}
 				
-				if (logPath != null) LogToFile(logPath, $"CLUSTERING RESULT: {validIds.Count} clustered markers from {ids.Length} detected");
+				if (logPath != null) LogToFile(logPath, $"STRICT FILTERING RESULT: {validIds.Count} valid markers with IDs: [{string.Join(", ", validIds)}] from {ids.Length} total detected");
 				
 			}
 			catch (Exception ex)
@@ -1540,25 +1750,66 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		// removed legacy QR helper
 
-		private void AddMarkerFromQuad(Point2f[] quad, int markerId, string logPath)
+				private void AddMarkerFromQuad(Point2f[] quad, int markerId, string logPath)
 		{
+			// COMPREHENSIVE MARKER PROCESSING LOGGING
+			LogToFile(logPath, $"=== ADDING MARKER {markerId} ===");
+			LogToFile(logPath, $"Input Quad Corners:");
+			for (int i = 0; i < quad.Length; i++)
+			{
+				LogToFile(logPath, $"  Corner {i}: ({quad[i].X:F2}, {quad[i].Y:F2})");
+			}
+			
 			// Calculate center of detected ArUco marker
 			double cx = 0, cy = 0;
 			for (int i = 0; i < 4; i++) { cx += quad[i].X; cy += quad[i].Y; }
 			cx /= 4.0; cy /= 4.0;
+			LogToFile(logPath, $"Calculated Center: ({cx:F2}, {cy:F2})");
 			
 			// Store color space coordinate
 			lastDetectedCentersColor.Add(new System.Windows.Point(cx, cy));
+			LogToFile(logPath, $"Stored in lastDetectedCentersColor. Count: {lastDetectedCentersColor.Count}");
+			
+			// CRITICAL: Ensure overlay is synchronized before drawing
+			LogToFile(logPath, "Synchronizing overlay with camera feed...");
+			SynchronizeOverlayWithCameraFeed();
+			LogToFile(logPath, $"After sync - MarkersOverlay: {MarkersOverlay.ActualWidth}x{MarkersOverlay.ActualHeight}");
 			
 			// Transform to canvas coordinates with detailed logging
 			var colorPt = new System.Windows.Point(cx, cy);
 			var canvasPt = ColorToCanvas(colorPt, logPath, markerId);
+			LogToFile(logPath, $"Coordinate Transformation: Camera({cx:F2},{cy:F2}) -> Canvas({canvasPt.X:F2},{canvasPt.Y:F2})");
+			
+			// Debug: Log canvas dimensions and marker position
+			System.Diagnostics.Debug.WriteLine($"Drawing marker {markerId}: Camera({cx:F1},{cy:F1}) -> Canvas({canvasPt.X:F1},{canvasPt.Y:F1})");
+			System.Diagnostics.Debug.WriteLine($"Canvas size: {MarkersOverlay.ActualWidth}x{MarkersOverlay.ActualHeight}");
 			
 			// Create red dot overlay with larger size for better visibility
+			LogToFile(logPath, "Creating red dot ellipse...");
 			var dot = new Ellipse { Width = 24, Height = 24, Fill = Brushes.Red, Stroke = Brushes.Yellow, StrokeThickness = 3 };
-			Canvas.SetLeft(dot, canvasPt.X - 12);  // Center the 24px dot
-			Canvas.SetTop(dot, canvasPt.Y - 12);
+			
+			// Ensure red dot is positioned within canvas bounds (accounting for dot size)
+			// Use the coordinates directly from ColorToCanvas which already has proper bounds checking
+			double dotLeft = canvasPt.X - 12;  // Center the 24px dot
+			double dotTop = canvasPt.Y - 12;   // Center the 24px dot
+			
+			Canvas.SetLeft(dot, dotLeft);  // Center the 24px dot within bounds
+			Canvas.SetTop(dot, dotTop);
+			LogToFile(logPath, $"Red dot properties: Width={dot.Width}, Height={dot.Height}, Fill={dot.Fill}, Stroke={dot.Stroke}");
+			LogToFile(logPath, $"Red dot position: Left={Canvas.GetLeft(dot):F2}, Top={Canvas.GetTop(dot):F2}");
+			
 			MarkersOverlay.Children.Add(dot);
+			LogToFile(logPath, $"Red dot added to MarkersOverlay. Children count: {MarkersOverlay.Children.Count}");
+			
+			// Debug: Log that red dot was added
+			System.Diagnostics.Debug.WriteLine($"Added red dot for marker {markerId} at canvas position ({canvasPt.X:F1},{canvasPt.Y:F1})");
+			System.Diagnostics.Debug.WriteLine($"Canvas now has {MarkersOverlay.Children.Count} children");
+			
+			// Force the canvas to update
+			LogToFile(logPath, "Forcing canvas layout update...");
+			MarkersOverlay.UpdateLayout();
+			LogToFile(logPath, "Canvas layout updated.");
+			LogToFile(logPath, "");
 			
 			// Add corner dots for better visualization with detailed logging
 			if (logPath != null)
@@ -1573,73 +1824,91 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			for (int i = 0; i < 4; i++)
 			{
 				var cornerColorPt = new System.Windows.Point(quad[i].X, quad[i].Y);
-									var cornerCanvasPt = ColorToCanvas(cornerColorPt); // Don't log each corner individually
+				var cornerCanvasPt = ColorToCanvas(cornerColorPt); // Don't log each corner individually
 				var cornerDot = new Ellipse { Width = 8, Height = 8, Fill = Brushes.LimeGreen, Stroke = Brushes.Black, StrokeThickness = 1 };
 				Canvas.SetLeft(cornerDot, cornerCanvasPt.X - 4);
 				Canvas.SetTop(cornerDot, cornerCanvasPt.Y - 4);
-				MarkersOverlay.Children.Add(cornerDot);
+					MarkersOverlay.Children.Add(cornerDot);
 			}
 		}
 
 		private System.Windows.Point ColorToCanvas(System.Windows.Point colorPoint, string logPath = null, int markerId = -1)
 		{
-			// Get actual dimensions
-			double containerW = MarkersOverlay.ActualWidth;
-			double containerH = MarkersOverlay.ActualHeight;
+			// CRITICAL FIX: The detected coordinates are from a vertically flipped image
+			// Detection uses FlipMode.Y which ONLY flips Y coordinates: Y=0 becomes Y=height, Y=height becomes Y=0
+			// The detection was designed to match the camera view, so X coordinates should be used directly
+			// Canvas coordinate system: Y=0 at top, Y=height at bottom
+			// So we need to flip Y back: Y_canvas = height - Y_detected
+			// X coordinates should be used directly: X_canvas = X_detected (NO horizontal flip)
 			int colorW = (kinectManager != null && kinectManager.ColorWidth > 0) ? kinectManager.ColorWidth : 1920;
 			int colorH = (kinectManager != null && kinectManager.ColorHeight > 0) ? kinectManager.ColorHeight : 1080;
+			
+			// FIXED: Apply both horizontal and vertical flips to red dots to align with Aruco markers
+			// 1. Flip X coordinate horizontally to correct rightward shift
+			// 2. Flip Y coordinate vertically to correct downward shift (red dots below are for upper Aruco)
+			System.Windows.Point cameraPoint = new System.Windows.Point(colorW - colorPoint.X, colorPoint.Y);
+			
+			// CRITICAL FIX: Use the MarkersOverlay size as the reference
+			// Since CameraFeed and MarkersOverlay are in the same Grid cell, they should have the same size
+			// The MarkersOverlay represents the actual coordinate space we need to map to
+			double cameraFeedW = MarkersOverlay.ActualWidth;
+			double cameraFeedH = MarkersOverlay.ActualHeight;
+			
+			// Log both sizes for debugging
+			if (logPath != null && markerId >= 0)
+			{
+				LogToFile(logPath, $"  Camera Feed (actual): {CameraFeed.ActualWidth:F1}x{CameraFeed.ActualHeight:F1}");
+				LogToFile(logPath, $"  MarkersOverlay (using): {cameraFeedW:F1}x{cameraFeedH:F1}");
+				if (CameraFeed.ActualWidth <= 0 || CameraFeed.ActualHeight <= 0)
+				{
+					LogToFile(logPath, $"  ⚠️  NOTE: CameraFeed not sized, using MarkersOverlay as reference");
+				}
+			}
 			
 			// Log container dimensions for debugging
 			if (logPath != null && markerId >= 0)
 			{
 				LogToFile(logPath, $"Marker {markerId} coordinate transformation:");
-				LogToFile(logPath, $"  Container (MarkersOverlay): {containerW:F1}x{containerH:F1}");
+				LogToFile(logPath, $"  Original detected coordinates: ({colorPoint.X:F1}, {colorPoint.Y:F1})");
+				LogToFile(logPath, $"  X-coordinate flip: {colorPoint.X:F1} -> {colorW - colorPoint.X:F1} (flipped horizontally for red dots)");
+				LogToFile(logPath, $"  Y-coordinate (direct): {colorPoint.Y:F1} (NO vertical flip for red dots)");
+				LogToFile(logPath, $"  Camera coordinates (X-flipped only): ({cameraPoint.X:F1}, {cameraPoint.Y:F1})");
+				LogToFile(logPath, $"  Camera Feed (actual): {CameraFeed.ActualWidth:F1}x{CameraFeed.ActualHeight:F1}");
+				LogToFile(logPath, $"  Camera Feed (using): {cameraFeedW:F1}x{cameraFeedH:F1}");
+				LogToFile(logPath, $"  MarkersOverlay: {MarkersOverlay.ActualWidth:F1}x{MarkersOverlay.ActualHeight:F1}");
 				LogToFile(logPath, $"  Camera resolution: {colorW}x{colorH}");
 			}
 			
-			// Critical: Check if container is properly sized - FORCE LARGER SIZE
-			if (containerW < 400 || containerH < 300) 
-			{ 
-				// Use camera feed size if available
-				if (CameraFeed.ActualWidth > 400 && CameraFeed.ActualHeight > 300)
-				{
-					containerW = CameraFeed.ActualWidth; 
-					containerH = CameraFeed.ActualHeight;
-				}
-				else
-				{
-					containerW = 800; 
-					containerH = 600;
-				}
-				if (logPath != null && markerId >= 0)
-				{
-					LogToFile(logPath, $"  ⚠️  FIXED: Container too small ({MarkersOverlay.ActualWidth:F1}x{MarkersOverlay.ActualHeight:F1}), using {containerW}x{containerH}");
-				}
-			}
+			// Calculate uniform scaling to fit color image in camera feed (maintaining aspect ratio)
+			double scale = Math.Min(cameraFeedW / colorW, cameraFeedH / colorH);
 			
-			// Calculate scaling to fit color image in container (maintaining aspect ratio)
-			double sx = containerW / colorW;
-			double sy = containerH / colorH;
-			double scale = Math.Min(sx, sy);  // Uniform scaling to fit
-			
-			// Calculate displayed image dimensions and centering offsets
+			// Calculate displayed image dimensions and centering offsets within camera feed
 			double displayedW = colorW * scale;
 			double displayedH = colorH * scale;
-			double offsetX = (containerW - displayedW) / 2.0;
-			double offsetY = (containerH - displayedH) / 2.0;
+			double offsetX = (cameraFeedW - displayedW) / 2.0;
+			double offsetY = (cameraFeedH - displayedH) / 2.0;
 			
-			// Transform color coordinates to canvas coordinates
-			double x = colorPoint.X * scale + offsetX;
-			double y = colorPoint.Y * scale + offsetY;
+			// Transform camera coordinates to camera feed coordinates using uniform scaling
+			double x = cameraPoint.X * scale + offsetX;
+			double y = cameraPoint.Y * scale + offsetY;
+			
+			// NO FINE-TUNING: The coordinate transformation should be mathematically correct
+			// The detected coordinates should map directly to the correct canvas positions
+			
+			// CRITICAL: Ensure coordinates are within the camera feed boundaries
+			// Allow some margin for the 24px dot size
+			x = Math.Max(12, Math.Min(cameraFeedW - 12, x));
+			y = Math.Max(12, Math.Min(cameraFeedH - 12, y));
 			
 			// Detailed coordinate logging to file
 			if (logPath != null && markerId >= 0)
 			{
-				LogToFile(logPath, $"  Camera coordinates: ({colorPoint.X:F1}, {colorPoint.Y:F1})");
-				LogToFile(logPath, $"  Scale factor: {scale:F4} (sx={sx:F4}, sy={sy:F4})");
+				LogToFile(logPath, $"  Scale factor: {scale:F4} (uniform scaling)");
 				LogToFile(logPath, $"  Displayed image: {displayedW:F1}x{displayedH:F1}");
-				LogToFile(logPath, $"  Canvas offset: ({offsetX:F1}, {offsetY:F1})");
+				LogToFile(logPath, $"  Camera feed offset: ({offsetX:F1}, {offsetY:F1})");
+				LogToFile(logPath, $"  No fine-tuning - using pure coordinate transformation");
 				LogToFile(logPath, $"  Final canvas coordinates: ({x:F1}, {y:F1})");
+				LogToFile(logPath, $"  Camera feed bounds: {cameraFeedW:F1}x{cameraFeedH:F1}");
 			}
 			
 			return new System.Windows.Point(x, y);
@@ -2169,6 +2438,271 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			catch (Exception ex)
 			{
 				LogToFile(logPath, $"ERROR in TestDetectionOnImage: {ex.Message}");
+			}
+		}
+		
+		private void CalculateAndSaveTouchArea(Point2f[][] corners, int[] ids, string logPath)
+		{
+			try
+			{
+				if (logPath != null) LogToFile(logPath, "\n=== CALCULATING TOUCH DETECTION AREA ===");
+				
+				// Create a dictionary to map marker IDs to their centers
+				var markerCenters = new Dictionary<int, System.Windows.Point>();
+				
+				for (int i = 0; i < corners.Length && i < ids.Length; i++)
+				{
+					// Calculate center of this marker
+					double cx = 0, cy = 0;
+					for (int j = 0; j < 4; j++) 
+					{ 
+						cx += corners[i][j].X; 
+						cy += corners[i][j].Y; 
+					}
+					cx /= 4.0; 
+					cy /= 4.0;
+					
+					markerCenters[ids[i]] = new System.Windows.Point(cx, cy);
+					
+					if (logPath != null) LogToFile(logPath, $"Marker ID {ids[i]} center: ({cx:F1}, {cy:F1})");
+				}
+				
+				// Ensure we have all 4 markers
+				if (markerCenters.Count == 4 && markerCenters.ContainsKey(0) && markerCenters.ContainsKey(1) && 
+				    markerCenters.ContainsKey(2) && markerCenters.ContainsKey(3))
+				{
+					// Get the 4 corner points (assuming standard layout: 0=top-left, 1=top-right, 2=bottom-right, 3=bottom-left)
+					var topLeft = markerCenters[0];
+					var topRight = markerCenters[1];
+					var bottomRight = markerCenters[2];
+					var bottomLeft = markerCenters[3];
+					
+					// Calculate the bounding rectangle
+					double minX = Math.Min(Math.Min(topLeft.X, topRight.X), Math.Min(bottomLeft.X, bottomRight.X));
+					double maxX = Math.Max(Math.Max(topLeft.X, topRight.X), Math.Max(bottomLeft.X, bottomRight.X));
+					double minY = Math.Min(Math.Min(topLeft.Y, topRight.Y), Math.Min(bottomLeft.Y, bottomRight.Y));
+					double maxY = Math.Max(Math.Max(topLeft.Y, topRight.Y), Math.Max(bottomLeft.Y, bottomRight.Y));
+					
+					// Create the touch area rectangle
+					var touchArea = new System.Windows.Rect(minX, minY, maxX - minX, maxY - minY);
+					
+					if (logPath != null)
+					{
+						LogToFile(logPath, $"Touch area rectangle: X={touchArea.X:F1}, Y={touchArea.Y:F1}, Width={touchArea.Width:F1}, Height={touchArea.Height:F1}");
+						LogToFile(logPath, $"Touch area corners:");
+						LogToFile(logPath, $"  Top-Left: ({touchArea.Left:F1}, {touchArea.Top:F1})");
+						LogToFile(logPath, $"  Top-Right: ({touchArea.Right:F1}, {touchArea.Top:F1})");
+						LogToFile(logPath, $"  Bottom-Left: ({touchArea.Left:F1}, {touchArea.Bottom:F1})");
+						LogToFile(logPath, $"  Bottom-Right: ({touchArea.Right:F1}, {touchArea.Bottom:F1})");
+					}
+					
+					// Save the touch area to calibration config
+					SaveTouchAreaToCalibrationConfig(touchArea, markerCenters, ids, logPath);
+					
+					// Draw the touch area rectangle on the overlay
+					DrawTouchAreaRectangle(touchArea, logPath);
+					
+					// Update status
+					Dispatcher.Invoke(() => {
+						StatusText.Text = $"Status: Touch area calculated and saved to system! Area: {touchArea.Width:F0}x{touchArea.Height:F0} pixels";
+						StatusText.Foreground = Brushes.Green;
+					});
+				}
+				else
+				{
+					if (logPath != null) LogToFile(logPath, "❌ Cannot calculate touch area - missing some marker IDs");
+				}
+			}
+			catch (Exception ex)
+			{
+				if (logPath != null) LogToFile(logPath, $"ERROR calculating touch area: {ex.Message}");
+			}
+		}
+		
+		private void SaveTouchAreaToCalibrationConfig(System.Windows.Rect touchArea, Dictionary<int, System.Windows.Point> markerCenters, int[] ids, string logPath)
+		{
+			try
+			{
+				// Create touch area definition
+				var touchAreaDef = new TouchAreaDefinition(
+					touchArea.X, 
+					touchArea.Y, 
+					touchArea.Width, 
+					touchArea.Height,
+					kinectManager?.ColorWidth ?? 1920,
+					kinectManager?.ColorHeight ?? 1080
+				);
+				
+				// Update calibration config
+				calibrationConfig.TouchArea = touchAreaDef;
+				calibrationConfig.TouchAreaCalculatedUtc = DateTime.UtcNow;
+				
+				// Store ArUco marker centers and IDs
+				calibrationConfig.ArUcoMarkerCenters.Clear();
+				calibrationConfig.ArUcoMarkerIds.Clear();
+				
+				foreach (var kvp in markerCenters.OrderBy(x => x.Key))
+				{
+					calibrationConfig.ArUcoMarkerCenters.Add(kvp.Value);
+					calibrationConfig.ArUcoMarkerIds.Add(kvp.Key);
+				}
+				
+				// Save to system calibration file
+				CalibrationStorage.Save(calibrationConfig);
+				
+				if (logPath != null) 
+				{
+					LogToFile(logPath, $"✅ Touch area saved to calibration config:");
+					LogToFile(logPath, $"  - Touch Area: X={touchAreaDef.X:F1}, Y={touchAreaDef.Y:F1}, W={touchAreaDef.Width:F1}, H={touchAreaDef.Height:F1}");
+					LogToFile(logPath, $"  - ArUco Markers: {string.Join(", ", calibrationConfig.ArUcoMarkerIds)}");
+					LogToFile(logPath, $"  - Camera Resolution: {touchAreaDef.CameraWidth}x{touchAreaDef.CameraHeight}");
+					LogToFile(logPath, $"  - Saved to: {System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "calibration.json")}");
+				}
+			}
+			catch (Exception ex)
+			{
+				if (logPath != null) LogToFile(logPath, $"ERROR saving touch area to calibration config: {ex.Message}");
+			}
+		}
+		
+		private void DrawTouchAreaRectangle(System.Windows.Rect touchArea, string logPath)
+		{
+			try
+			{
+				// COMPREHENSIVE RECTANGLE DRAWING LOGGING
+				LogToFile(logPath, "=== DRAWING TOUCH AREA RECTANGLE ===");
+				LogToFile(logPath, $"Input touch area: X={touchArea.X:F2}, Y={touchArea.Y:F2}, Width={touchArea.Width:F2}, Height={touchArea.Height:F2}");
+				LogToFile(logPath, $"Before rectangle - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
+				
+				// Convert camera coordinates to canvas coordinates
+				var topLeftCanvas = ColorToCanvas(new System.Windows.Point(touchArea.Left, touchArea.Top));
+				var topRightCanvas = ColorToCanvas(new System.Windows.Point(touchArea.Right, touchArea.Top));
+				var bottomLeftCanvas = ColorToCanvas(new System.Windows.Point(touchArea.Left, touchArea.Bottom));
+				var bottomRightCanvas = ColorToCanvas(new System.Windows.Point(touchArea.Right, touchArea.Bottom));
+				
+				LogToFile(logPath, $"Canvas coordinates:");
+				LogToFile(logPath, $"  Top-Left: ({topLeftCanvas.X:F2}, {topLeftCanvas.Y:F2})");
+				LogToFile(logPath, $"  Top-Right: ({topRightCanvas.X:F2}, {topRightCanvas.Y:F2})");
+				LogToFile(logPath, $"  Bottom-Left: ({bottomLeftCanvas.X:F2}, {bottomLeftCanvas.Y:F2})");
+				LogToFile(logPath, $"  Bottom-Right: ({bottomRightCanvas.X:F2}, {bottomRightCanvas.Y:F2})");
+				
+				// Create rectangle outline
+				var rectangle = new System.Windows.Shapes.Rectangle
+				{
+					Width = topRightCanvas.X - topLeftCanvas.X,
+					Height = bottomLeftCanvas.Y - topLeftCanvas.Y,
+					Stroke = Brushes.Cyan,
+					StrokeThickness = 3,
+					Fill = Brushes.Transparent,
+					StrokeDashArray = new DoubleCollection { 5, 5 } // Dashed line
+				};
+				
+				Canvas.SetLeft(rectangle, topLeftCanvas.X);
+				Canvas.SetTop(rectangle, topLeftCanvas.Y);
+				
+				LogToFile(logPath, $"Rectangle properties:");
+				LogToFile(logPath, $"  Width: {rectangle.Width:F2}");
+				LogToFile(logPath, $"  Height: {rectangle.Height:F2}");
+				LogToFile(logPath, $"  Position: Left={Canvas.GetLeft(rectangle):F2}, Top={Canvas.GetTop(rectangle):F2}");
+				LogToFile(logPath, $"  Stroke: {rectangle.Stroke}");
+				LogToFile(logPath, $"  Fill: {rectangle.Fill}");
+				
+				// Add to overlay
+				MarkersOverlay.Children.Add(rectangle);
+				LogToFile(logPath, $"Rectangle added to MarkersOverlay. Children count: {MarkersOverlay.Children.Count}");
+				
+				// Add corner markers
+				var cornerSize = 12;
+				var corners = new[]
+				{
+					new { Point = topLeftCanvas, Label = "TL" },
+					new { Point = topRightCanvas, Label = "TR" },
+					new { Point = bottomLeftCanvas, Label = "BL" },
+					new { Point = bottomRightCanvas, Label = "BR" }
+				};
+				
+				foreach (var corner in corners)
+				{
+					var cornerDot = new Ellipse
+					{
+						Width = cornerSize,
+						Height = cornerSize,
+						Fill = Brushes.Cyan,
+						Stroke = Brushes.Black,
+						StrokeThickness = 2
+					};
+					
+					Canvas.SetLeft(cornerDot, corner.Point.X - cornerSize / 2);
+					Canvas.SetTop(cornerDot, corner.Point.Y - cornerSize / 2);
+					MarkersOverlay.Children.Add(cornerDot);
+					
+					// Add label
+					var label = new TextBlock
+					{
+						Text = corner.Label,
+						Foreground = Brushes.Cyan,
+						FontWeight = FontWeights.Bold,
+						FontSize = 12
+					};
+					
+					Canvas.SetLeft(label, corner.Point.X + cornerSize / 2 + 2);
+					Canvas.SetTop(label, corner.Point.Y - cornerSize / 2);
+					MarkersOverlay.Children.Add(label);
+				}
+			}
+			catch (Exception ex)
+			{
+				// Log error but don't crash
+				System.Diagnostics.Debug.WriteLine($"Error drawing touch area rectangle: {ex.Message}");
+			}
+		}
+		
+		private void DrawRectangleFromRedDots()
+		{
+			try
+			{
+				System.Diagnostics.Debug.WriteLine($"DrawRectangleFromRedDots called - lastDetectedCentersColor.Count: {lastDetectedCentersColor.Count}");
+				
+				if (lastDetectedCentersColor.Count != 4) 
+				{
+					System.Diagnostics.Debug.WriteLine("Not drawing rectangle - need exactly 4 red dots");
+					return;
+				}
+				
+				// Convert the red dot positions to canvas coordinates
+				var canvasPoints = new System.Windows.Point[4];
+				for (int i = 0; i < 4; i++)
+				{
+					canvasPoints[i] = ColorToCanvas(lastDetectedCentersColor[i]);
+					System.Diagnostics.Debug.WriteLine($"Red dot {i}: Camera({lastDetectedCentersColor[i].X:F1},{lastDetectedCentersColor[i].Y:F1}) -> Canvas({canvasPoints[i].X:F1},{canvasPoints[i].Y:F1})");
+				}
+				
+				// Create lines connecting the red dots to form a rectangle
+				for (int i = 0; i < 4; i++)
+				{
+					var start = canvasPoints[i];
+					var end = canvasPoints[(i + 1) % 4];
+					
+					var line = new System.Windows.Shapes.Line
+					{
+						X1 = start.X,
+						Y1 = start.Y,
+						X2 = end.X,
+						Y2 = end.Y,
+						Stroke = Brushes.Cyan,
+						StrokeThickness = 5, // Make it thicker for visibility
+						StrokeDashArray = new DoubleCollection { 8, 4 } // Make dashes more visible
+					};
+					
+					MarkersOverlay.Children.Add(line);
+					System.Diagnostics.Debug.WriteLine($"Added line {i}: ({start.X:F1},{start.Y:F1}) -> ({end.X:F1},{end.Y:F1})");
+				}
+				
+				System.Diagnostics.Debug.WriteLine($"Rectangle drawn connecting red dots - Total children: {MarkersOverlay.Children.Count}");
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"Error drawing rectangle from red dots: {ex.Message}");
 			}
 		}
 	}

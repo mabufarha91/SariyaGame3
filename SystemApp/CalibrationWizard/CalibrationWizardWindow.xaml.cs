@@ -145,7 +145,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			// Persist immediately when proceeding to next screen
 			try { CalibrationStorage.Save(calibrationConfig); } catch { }
 			// Go to Screen 2
-			var screen2 = new Screen2_MarkerAlignment(kinectManager);
+			var screen2 = new Screen2_MarkerAlignment(kinectManager, calibrationConfig);
 			var res2 = screen2.ShowDialog();
 			// Proceed to Screen 3 regardless of calibration transform for now
 			var screen3 = new Screen3_TouchTest(kinectManager, calibrationConfig);

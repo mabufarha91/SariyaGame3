@@ -44,6 +44,16 @@ namespace KinectCalibrationWPF.Models
 		[DataMember]
 		public double[,] PerspectiveTransform3x3 { get; set; } // 3x3 row-major
 
+		// Screen 2 Touch Area Detection
+		[DataMember]
+		public TouchAreaDefinition TouchArea { get; set; } // Touch detection area calculated from ArUco markers
+		[DataMember]
+		public List<Point> ArUcoMarkerCenters { get; set; } // Center points of detected ArUco markers (IDs 0,1,2,3)
+		[DataMember]
+		public List<int> ArUcoMarkerIds { get; set; } // IDs of detected ArUco markers
+		[DataMember]
+		public DateTime TouchAreaCalculatedUtc { get; set; } // When touch area was calculated
+
 		public CalibrationConfig()
 		{
 			CornerPointsNormalized = new List<Point>();
@@ -59,6 +69,10 @@ namespace KinectCalibrationWPF.Models
 			HsvHueMin = 0;
 			HsvSatMin = 0;
 			HsvValMin = 200;
+			TouchArea = new TouchAreaDefinition();
+			ArUcoMarkerCenters = new List<Point>();
+			ArUcoMarkerIds = new List<int>();
+			TouchAreaCalculatedUtc = DateTime.MinValue;
 			ProjectorMarkerCenters = new List<Point>();
 			CameraMarkerCornersTL = new List<Point>();
 			PerspectiveTransform3x3 = new double[3,3]
@@ -92,5 +106,51 @@ namespace KinectCalibrationWPF.Models
 		public double Nz { get; set; }
 		[DataMember]
 		public double D { get; set; } // plane equation: n.x * X + n.y * Y + n.z * Z + D = 0
+	}
+
+	[DataContract]
+	public class TouchAreaDefinition
+	{
+		[DataMember]
+		public double X { get; set; } // Left edge in camera coordinates
+		[DataMember]
+		public double Y { get; set; } // Top edge in camera coordinates
+		[DataMember]
+		public double Width { get; set; } // Width in camera coordinates
+		[DataMember]
+		public double Height { get; set; } // Height in camera coordinates
+		[DataMember]
+		public double Left { get; set; } // Left edge
+		[DataMember]
+		public double Top { get; set; } // Top edge
+		[DataMember]
+		public double Right { get; set; } // Right edge
+		[DataMember]
+		public double Bottom { get; set; } // Bottom edge
+		[DataMember]
+		public int CameraWidth { get; set; } // Camera resolution width
+		[DataMember]
+		public int CameraHeight { get; set; } // Camera resolution height
+
+		public TouchAreaDefinition()
+		{
+			X = Y = Width = Height = Left = Top = Right = Bottom = 0;
+			CameraWidth = 1920;
+			CameraHeight = 1080;
+		}
+
+		public TouchAreaDefinition(double x, double y, double width, double height, int cameraWidth = 1920, int cameraHeight = 1080)
+		{
+			X = x;
+			Y = y;
+			Width = width;
+			Height = height;
+			Left = x;
+			Top = y;
+			Right = x + width;
+			Bottom = y + height;
+			CameraWidth = cameraWidth;
+			CameraHeight = cameraHeight;
+		}
 	}
 }

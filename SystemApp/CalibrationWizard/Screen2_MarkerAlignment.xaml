@@ -34,7 +34,7 @@
 							</Grid.RowDefinitions>
 							<Grid Grid.Row="0">
 								<Image x:Name="CameraFeed" Stretch="Uniform"/>
-								<Canvas x:Name="MarkersOverlay" Background="Transparent"/>
+								<Canvas x:Name="MarkersOverlay" Background="Transparent" ClipToBounds="True"/>
 							</Grid>
 						</Grid>
 					</Border>
