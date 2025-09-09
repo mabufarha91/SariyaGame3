@@ -36,5 +36,22 @@ namespace KinectCalibrationWPF.Services
 			var baseDir = System.AppDomain.CurrentDomain.BaseDirectory;
 			return System.IO.Path.Combine(baseDir, DefaultFileName);
 		}
+		
+		public static void DeleteCorruptedFile()
+		{
+			try
+			{
+				var path = GetDefaultPath();
+				if (System.IO.File.Exists(path))
+				{
+					System.IO.File.Delete(path);
+					System.Diagnostics.Debug.WriteLine("Deleted corrupted calibration file");
+				}
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"Could not delete corrupted calibration file: {ex.Message}");
+			}
+		}
 	}
 }

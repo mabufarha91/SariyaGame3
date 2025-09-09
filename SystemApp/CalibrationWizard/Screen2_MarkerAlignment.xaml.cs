@@ -26,6 +26,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 	{
 		private KinectManager.KinectManager kinectManager;
 		private DispatcherTimer cameraUpdateTimer;
+		private DispatcherTimer monitoringTimer;
 		private bool markersDetected = false;
 		private ProjectorWindow projectorWindow;
 		private List<System.Windows.Point> lastDetectedCentersColor = new List<System.Windows.Point>();
@@ -58,6 +59,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			cameraUpdateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
 			cameraUpdateTimer.Tick += cameraUpdateTimer_Tick;
 			cameraUpdateTimer.Start();
+			
+			// Initialize monitoring timer for real-time updates
+			monitoringTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+			monitoringTimer.Tick += MonitoringTimer_Tick;
+			monitoringTimer.Start();
 			this.KeyDown += Screen2_KeyDown;
 			this.Focusable = true;
 		}
@@ -162,16 +168,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					// Clear current overlay
 					MarkersOverlay.Children.Clear();
 					
-					// Re-add test blue dot at center
-					var testDot = new Ellipse { Width = 20, Height = 20, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 2 };
-					
-					// Position the test dot at the center of the MarkersOverlay (which represents the camera feed area)
-					double centerX = MarkersOverlay.ActualWidth / 2.0;
-					double centerY = MarkersOverlay.ActualHeight / 2.0;
-					
-					Canvas.SetLeft(testDot, centerX - 10);  // Center the 20px dot
-					Canvas.SetTop(testDot, centerY - 10);   // Center the 20px dot
-					MarkersOverlay.Children.Add(testDot);
+					// Blue test dot removed - no longer needed
 					
 					// Re-process all detected markers with new coordinates
 					for (int i = 0; i < _detectedCorners.Length; i++)
@@ -180,11 +177,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						AddMarkerFromQuad(_detectedCorners[i], markerId, null);
 					}
 					
-					// Re-draw touch area rectangle if all 4 markers are present
-					if (_detectedIds != null && _detectedIds.Length == 4 && HasAllMarkerIds(_detectedIds))
-					{
-						CalculateAndSaveTouchArea(_detectedCorners, _detectedIds, null);
-					}
+					// Touch area calculation moved to Calibrate button - not calculated here
 					
 					// Draw rectangle connecting the red dots if we have 4 markers
 					if (lastDetectedCentersColor.Count == 4)
@@ -491,22 +484,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					LogToFile(markerDiagPath, $"After Clear - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
 					LogToFile(markerDiagPath, "");
 					
-					// DEBUG: Add a test marker to verify canvas is working
-					LogToFile(markerDiagPath, "=== TEST MARKER CREATION ===");
-					var testDot = new Ellipse { Width = 20, Height = 20, Fill = Brushes.Blue, Stroke = Brushes.White, StrokeThickness = 2 };
-					
-					// Position the test dot at the center of the MarkersOverlay (which represents the camera feed area)
-					double centerX = MarkersOverlay.ActualWidth / 2.0;
-					double centerY = MarkersOverlay.ActualHeight / 2.0;
-					
-					Canvas.SetLeft(testDot, centerX - 10);  // Center the 20px dot
-					Canvas.SetTop(testDot, centerY - 10);   // Center the 20px dot
-					MarkersOverlay.Children.Add(testDot);
-					LogToFile(markerDiagPath, $"Test Blue Dot Created at center ({centerX:F1},{centerY:F1})");
-					LogToFile(markerDiagPath, $"After Test Dot - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
-					LogToFile(markerDiagPath, $"Test Dot Properties: Width={testDot.Width}, Height={testDot.Height}, Fill={testDot.Fill}");
-					LogToFile(markerDiagPath, "");
-					System.Diagnostics.Debug.WriteLine("Added test blue dot at (50,50)");
+					// Blue test dot removed - no longer needed
 					
 					// Enhanced coordinate logging for detected markers
 						if (verbose)
@@ -551,20 +529,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						LogToFile(markerDiagPath, $"After rectangle - MarkersOverlay Children Count: {MarkersOverlay.Children.Count}");
 					}
 					
-					// Calculate and save touch area if all 4 markers are detected
-					LogToFile(markerDiagPath, "=== TOUCH AREA CALCULATION ===");
+					// Touch area calculation moved to Calibrate button - not calculated here
+					LogToFile(markerDiagPath, "=== MARKER DETECTION COMPLETE ===");
 					LogToFile(markerDiagPath, $"Detected markers count: {result.Ids.Length}");
 					LogToFile(markerDiagPath, $"Has all marker IDs: {HasAllMarkerIds(result.Ids)}");
-					
-					if (result.Ids.Length == 4 && HasAllMarkerIds(result.Ids))
-					{
-						LogToFile(markerDiagPath, "All 4 markers detected - calculating touch area...");
-						CalculateAndSaveTouchArea(result.Corners, result.Ids, markerDiagPath);
-					}
-					else
-					{
-						LogToFile(markerDiagPath, "Not all 4 markers detected - skipping touch area calculation");
-					}
+					LogToFile(markerDiagPath, "Touch area calculation will be performed when Calibrate button is pressed");
 					LogToFile(markerDiagPath, "");
 					
 					if (verbose)
@@ -1218,7 +1187,28 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private void LogToFile(string path, string message)
 		{
-			try { File.AppendAllText(path, message + Environment.NewLine); } catch { }
+			try 
+			{ 
+				// Ensure directory exists
+				var directory = System.IO.Path.GetDirectoryName(path);
+				if (!string.IsNullOrEmpty(directory) && !System.IO.Directory.Exists(directory))
+				{
+					System.IO.Directory.CreateDirectory(directory);
+				}
+				
+				File.AppendAllText(path, $"[{DateTime.Now:HH:mm:ss.fff}] {message}" + Environment.NewLine); 
+			} 
+			catch (Exception ex) 
+			{ 
+				System.Diagnostics.Debug.WriteLine($"LogToFile failed: {ex.Message}");
+				// Try to log to a fallback location
+				try
+				{
+					var fallbackPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "calibration_diagnostic_fallback.txt");
+					File.AppendAllText(fallbackPath, $"[{DateTime.Now:HH:mm:ss.fff}] {message}" + Environment.NewLine);
+				}
+				catch { }
+			}
 		}
 
 		private ProjectorWindow GetProjectorWindow()
@@ -1922,14 +1912,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private void NudgeM2_Down(object sender, RoutedEventArgs e) { markerY[1] = Math.Min(1080, markerY[1] + NudgeStep); ApplyMarkerPositions(); }
 		private void NudgeM2_Left(object sender, RoutedEventArgs e) { markerX[1] = Math.Max(0, markerX[1] - NudgeStep); ApplyMarkerPositions(); }
 		private void NudgeM2_Right(object sender, RoutedEventArgs e) { markerX[1] = Math.Min(1920, markerX[1] + NudgeStep); ApplyMarkerPositions(); }
-		private void NudgeM3_Up(object sender, RoutedEventArgs e) { markerY[2] = Math.Max(0, markerY[2] - NudgeStep); ApplyMarkerPositions(); }
-		private void NudgeM3_Down(object sender, RoutedEventArgs e) { markerY[2] = Math.Min(1080, markerY[2] + NudgeStep); ApplyMarkerPositions(); }
-		private void NudgeM3_Left(object sender, RoutedEventArgs e) { markerX[2] = Math.Max(0, markerX[2] - NudgeStep); ApplyMarkerPositions(); }
-		private void NudgeM3_Right(object sender, RoutedEventArgs e) { markerX[2] = Math.Min(1920, markerX[2] + NudgeStep); ApplyMarkerPositions(); }
-		private void NudgeM4_Up(object sender, RoutedEventArgs e) { markerY[3] = Math.Max(0, markerY[3] - NudgeStep); ApplyMarkerPositions(); }
-		private void NudgeM4_Down(object sender, RoutedEventArgs e) { markerY[3] = Math.Min(1080, markerY[3] + NudgeStep); ApplyMarkerPositions(); }
-		private void NudgeM4_Left(object sender, RoutedEventArgs e) { markerX[3] = Math.Max(0, markerX[3] - NudgeStep); ApplyMarkerPositions(); }
-		private void NudgeM4_Right(object sender, RoutedEventArgs e) { markerX[3] = Math.Min(1920, markerX[3] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM3_Up(object sender, RoutedEventArgs e) { markerY[3] = Math.Max(0, markerY[3] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM3_Down(object sender, RoutedEventArgs e) { markerY[3] = Math.Min(1080, markerY[3] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM3_Left(object sender, RoutedEventArgs e) { markerX[3] = Math.Max(0, markerX[3] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM3_Right(object sender, RoutedEventArgs e) { markerX[3] = Math.Min(1920, markerX[3] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM4_Up(object sender, RoutedEventArgs e) { markerY[2] = Math.Max(0, markerY[2] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM4_Down(object sender, RoutedEventArgs e) { markerY[2] = Math.Min(1080, markerY[2] + NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM4_Left(object sender, RoutedEventArgs e) { markerX[2] = Math.Max(0, markerX[2] - NudgeStep); ApplyMarkerPositions(); }
+		private void NudgeM4_Right(object sender, RoutedEventArgs e) { markerX[2] = Math.Min(1920, markerX[2] + NudgeStep); ApplyMarkerPositions(); }
 
 		private void CalibrateButton_Click(object sender, RoutedEventArgs e)
 		{
@@ -1940,6 +1930,60 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				StatusText.Foreground = Brushes.Orange;
 				return;
 			}
+
+			// Check if we have all required marker IDs
+			if (!HasAllMarkerIds(_detectedIds))
+			{
+				StatusText.Text = "Status: Need markers with IDs 0, 1, 2, 3 for calibration";
+				StatusText.Foreground = Brushes.Orange;
+				return;
+			}
+
+			StatusText.Text = "Status: Calculating touch area and Kinect distance...";
+			StatusText.Foreground = Brushes.Blue;
+			
+			// Create comprehensive diagnostic log
+			// Use the same timestamped directory as other diagnostic files
+			string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+			string baseDiag = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics");
+			string diagnosticDir = System.IO.Path.Combine(baseDiag, timestamp);
+			if (!System.IO.Directory.Exists(diagnosticDir))
+			{
+				System.IO.Directory.CreateDirectory(diagnosticDir);
+			}
+			string diagnosticPath = System.IO.Path.Combine(diagnosticDir, "calibration_diagnostic.txt");
+			LogToFile(diagnosticPath, "=== COMPREHENSIVE CALIBRATION DIAGNOSTIC ===");
+			LogToFile(diagnosticPath, $"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+			LogToFile(diagnosticPath, "");
+			
+			// Diagnostic 1: Kinect Status
+			LogToFile(diagnosticPath, "=== KINECT STATUS DIAGNOSTIC ===");
+			LogToFile(diagnosticPath, $"Kinect Initialized: {kinectManager?.IsInitialized}");
+			LogToFile(diagnosticPath, $"Color Stream Active: {kinectManager?.IsColorStreamActive()}");
+			LogToFile(diagnosticPath, $"Depth Stream Active: {kinectManager?.IsDepthStreamActive()}");
+			LogToFile(diagnosticPath, $"Color Resolution: {kinectManager?.ColorWidth}x{kinectManager?.ColorHeight}");
+			LogToFile(diagnosticPath, $"Depth Resolution: {kinectManager?.DepthWidth}x{kinectManager?.DepthHeight}");
+			LogToFile(diagnosticPath, "");
+			
+			// Diagnostic 2: Marker Detection Status
+			LogToFile(diagnosticPath, "=== MARKER DETECTION DIAGNOSTIC ===");
+			LogToFile(diagnosticPath, $"Detected Markers Count: {_detectedIds?.Length ?? 0}");
+			if (_detectedIds != null)
+			{
+				LogToFile(diagnosticPath, $"Detected Marker IDs: [{string.Join(", ", _detectedIds)}]");
+				LogToFile(diagnosticPath, $"Has All Required IDs (0,1,2,3): {HasAllMarkerIds(_detectedIds)}");
+			}
+			LogToFile(diagnosticPath, "");
+			
+			// Diagnostic 3: Real-time Monitoring Data
+			LogToFile(diagnosticPath, "=== REAL-TIME MONITORING DIAGNOSTIC ===");
+			LogToFile(diagnosticPath, $"Current Distance: {DistanceText.Text}");
+			LogToFile(diagnosticPath, $"Distance Status: {DistanceStatus.Text}");
+			LogToFile(diagnosticPath, $"Marker Size: {MarkerSizeText.Text}");
+			LogToFile(diagnosticPath, $"Marker Size Status: {MarkerSizeStatus.Text}");
+			LogToFile(diagnosticPath, $"Quality Score: {QualityText.Text}");
+			LogToFile(diagnosticPath, $"Quality Status: {QualityStatus.Text}");
+			LogToFile(diagnosticPath, "");
 
 			// Build sorted projector centers by marker index 0..3
 			var projectorPts = new Point2f[4];
@@ -1979,7 +2023,18 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				for (int c = 0; c < 3; c++)
 					H33[r, c] = H.Get<double>(r, c);
 
-			var cfg = CalibrationStorage.Load() ?? new CalibrationConfig();
+			CalibrationConfig cfg;
+			try
+			{
+				cfg = CalibrationStorage.Load() ?? new CalibrationConfig();
+			}
+			catch (Exception ex)
+			{
+				LogToFile(diagnosticPath, $"WARNING: Could not load existing calibration file: {ex.Message}");
+				LogToFile(diagnosticPath, "Deleting corrupted calibration file and creating new configuration...");
+				CalibrationStorage.DeleteCorruptedFile();
+				cfg = new CalibrationConfig();
+			}
 			cfg.ProjectorMarkerPositions.Clear();
 			cfg.ProjectorMarkerPositions.Add(new System.Windows.Point(markerX[0], markerY[0]));
 			cfg.ProjectorMarkerPositions.Add(new System.Windows.Point(markerX[1], markerY[1]));
@@ -1993,13 +2048,96 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			cfg.HsvValMin = 0;
 			cfg.ProjectorMarkerCenters = projectorPts.Select(p => new System.Windows.Point(p.X, p.Y)).ToList();
 			cfg.CameraMarkerCornersTL = cameraPtsListForSave;
-			cfg.PerspectiveTransform3x3 = H33;
+			// Convert 2D array to 1D array (row-major order)
+			cfg.PerspectiveTransform3x3 = new double[9];
+			for (int r = 0; r < 3; r++)
+			{
+				for (int c = 0; c < 3; c++)
+				{
+					cfg.PerspectiveTransform3x3[r * 3 + c] = H33[r, c];
+				}
+			}
 			cfg.SavedUtc = DateTime.UtcNow;
+
+			// COMPREHENSIVE TOUCH AREA AND KINECT DISTANCE CALCULATION
+			try
+			{
+				LogToFile(diagnosticPath, "=== STARTING TOUCH AREA CALCULATION ===");
+				CalculateTouchAreaAndKinectDistance(cfg, _detectedCorners, _detectedIds);
+				LogToFile(diagnosticPath, "Touch area calculation completed successfully");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(diagnosticPath, $"ERROR in CalculateTouchAreaAndKinectDistance: {ex.Message}");
+				LogToFile(diagnosticPath, $"Stack Trace: {ex.StackTrace}");
+				throw; // Re-throw to be caught by outer try-catch
+			}
+			
+			// Diagnostic 4: Touch Area Calculation Results
+			LogToFile(diagnosticPath, "=== TOUCH AREA CALCULATION DIAGNOSTIC ===");
+			LogToFile(diagnosticPath, $"Touch Area X: {cfg.TouchArea.X:F1}");
+			LogToFile(diagnosticPath, $"Touch Area Y: {cfg.TouchArea.Y:F1}");
+			LogToFile(diagnosticPath, $"Touch Area Width: {cfg.TouchArea.Width:F1}");
+			LogToFile(diagnosticPath, $"Touch Area Height: {cfg.TouchArea.Height:F1}");
+			LogToFile(diagnosticPath, $"Kinect Distance: {cfg.KinectToSurfaceDistanceMeters:F3} meters");
+			LogToFile(diagnosticPath, $"Touch Threshold: {cfg.TouchDetectionThresholdMeters:F3} meters");
+			LogToFile(diagnosticPath, $"Physical Width: {cfg.TouchAreaWidthMeters:F3} meters");
+			LogToFile(diagnosticPath, $"Physical Height: {cfg.TouchAreaHeightMeters:F3} meters");
+			LogToFile(diagnosticPath, $"Average Marker Size: {cfg.AverageMarkerSizePixels:F1} pixels");
+			LogToFile(diagnosticPath, $"Calibration Accuracy: {cfg.CalibrationAccuracyScore:F2}");
+			LogToFile(diagnosticPath, $"3D Corner Points Count: {cfg.TouchAreaCorners3D?.Count ?? 0}");
+			LogToFile(diagnosticPath, "");
+			
+			// Diagnostic 5: Touch Area Validation
+			LogToFile(diagnosticPath, "=== TOUCH AREA VALIDATION DIAGNOSTIC ===");
+			bool touchAreaValid = ValidateTouchArea(cfg, diagnosticPath);
+			LogToFile(diagnosticPath, $"Touch Area Valid: {touchAreaValid}");
+			LogToFile(diagnosticPath, "");
+			
+			// Diagnostic 6: Kinect Touch Sensor Verification
+			LogToFile(diagnosticPath, "=== KINECT TOUCH SENSOR VERIFICATION ===");
+			bool kinectTouchVerified = VerifyKinectTouchArea(cfg, diagnosticPath);
+			LogToFile(diagnosticPath, $"Kinect Touch Area Verified: {kinectTouchVerified}");
+			LogToFile(diagnosticPath, "");
 
 			try
 			{
+				LogToFile(diagnosticPath, "=== ATTEMPTING TO SAVE CALIBRATION ===");
+				LogToFile(diagnosticPath, $"Saving calibration to: {System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "calibration.json")}");
+				
+				// Validate the configuration before saving
+				LogToFile(diagnosticPath, "Validating configuration before save...");
+				if (cfg == null)
+				{
+					throw new Exception("Configuration object is null");
+				}
+				
+				// Check critical properties
+				LogToFile(diagnosticPath, $"TouchArea: {cfg.TouchArea?.Width}x{cfg.TouchArea?.Height}");
+				LogToFile(diagnosticPath, $"ArUcoMarkerCenters count: {cfg.ArUcoMarkerCenters?.Count ?? 0}");
+				LogToFile(diagnosticPath, $"TouchAreaCorners3D count: {cfg.TouchAreaCorners3D?.Count ?? 0}");
+				
 				CalibrationStorage.Save(cfg);
-				MessageBox.Show("Calibration successful!");
+				LogToFile(diagnosticPath, "Calibration saved successfully!");
+				
+				// Final diagnostic summary
+				LogToFile(diagnosticPath, "=== CALIBRATION SUMMARY ===");
+				LogToFile(diagnosticPath, $"Calibration Status: SUCCESS");
+				LogToFile(diagnosticPath, $"Touch Area Valid: {touchAreaValid}");
+				LogToFile(diagnosticPath, $"Kinect Touch Verified: {kinectTouchVerified}");
+				LogToFile(diagnosticPath, $"Overall Quality: {cfg.CalibrationAccuracyScore:F2}");
+				LogToFile(diagnosticPath, $"Saved to: {System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "calibration.json")}");
+				LogToFile(diagnosticPath, "");
+				LogToFile(diagnosticPath, "=== END OF DIAGNOSTIC ===");
+				
+				string successMessage = $"Calibration successful!\n\n" +
+					$"Touch Area: {cfg.TouchArea.Width:F0}x{cfg.TouchArea.Height:F0} pixels\n" +
+					$"Physical Size: {cfg.TouchAreaWidthMeters:F2}x{cfg.TouchAreaHeightMeters:F2} meters\n" +
+					$"Kinect Distance: {cfg.KinectToSurfaceDistanceMeters:F2} meters\n" +
+					$"Quality Score: {cfg.CalibrationAccuracyScore:F2}\n\n" +
+					$"Diagnostic saved to: calibration_diagnostic.txt";
+				
+				MessageBox.Show(successMessage, "Calibration Complete", MessageBoxButton.OK, MessageBoxImage.Information);
 				StatusText.Text = "Status: CALIBRATED";
 				StatusText.Foreground = Brushes.Green;
 				NextButton.IsEnabled = true;
@@ -2007,8 +2145,17 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			catch (Exception ex)
 			{
+				LogToFile(diagnosticPath, $"=== CALIBRATION SAVE FAILED ===");
+				LogToFile(diagnosticPath, $"Error: {ex.Message}");
+				LogToFile(diagnosticPath, $"Stack Trace: {ex.StackTrace}");
+				LogToFile(diagnosticPath, "=== END OF DIAGNOSTIC ===");
+				
 				StatusText.Text = $"Status: Failed to save calibration ({ex.Message})";
 				StatusText.Foreground = Brushes.OrangeRed;
+				
+				// Show detailed error to user
+				MessageBox.Show($"Calibration failed to save:\n\n{ex.Message}\n\nCheck calibration_diagnostic.txt for details.", 
+					"Calibration Error", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
 		}
 
@@ -2073,373 +2220,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			_valMin = (int)e.NewValue;
 		}
 		
-		private void TestMarker0Button_Click(object sender, RoutedEventArgs e)
-		{
-			try
-			{
-				TestMarker0Button.IsEnabled = false;
-				TestMarker0Button.Content = "🔍 Testing...";
-				
-				// Run the test in a background thread to avoid blocking UI
-				Task.Run(() => {
-					try
-					{
-						PerformComprehensiveMarker0Test();
-					}
-					catch (Exception ex)
-					{
-						Dispatcher.Invoke(() => {
-							StatusText.Text = $"Test Error: {ex.Message}";
-							StatusText.Foreground = new SolidColorBrush(Colors.Red);
-						});
-					}
-					finally
-					{
-						Dispatcher.Invoke(() => {
-							TestMarker0Button.IsEnabled = true;
-							TestMarker0Button.Content = "🔍 Test Marker ID 0 Only";
-						});
-					}
-				});
-			}
-			catch (Exception ex)
-			{
-				StatusText.Text = $"Test Error: {ex.Message}";
-				StatusText.Foreground = new SolidColorBrush(Colors.Red);
-				TestMarker0Button.IsEnabled = true;
-				TestMarker0Button.Content = "🔍 Test Marker ID 0 Only";
-			}
-		}
 		
-		private void PerformComprehensiveMarker0Test()
-		{
-			try
-			{
-				Dispatcher.Invoke(() => {
-					StatusText.Text = "🔍 Starting comprehensive Marker ID 0 test...";
-					StatusText.Foreground = new SolidColorBrush(Colors.Orange);
-				});
-				
-				// Create diagnostic directory
-				var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-				var diagnosticDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics", $"Marker0Test_{timestamp}");
-				Directory.CreateDirectory(diagnosticDir);
-				
-				var logPath = System.IO.Path.Combine(diagnosticDir, "marker0_test_log.txt");
-				
-				LogToFile(logPath, "=== COMPREHENSIVE MARKER ID 0 TEST ===");
-				LogToFile(logPath, $"Test started at: {DateTime.Now}");
-				LogToFile(logPath, $"Test directory: {diagnosticDir}");
-				LogToFile(logPath, "");
-				
-				// Step 1: Test the marker file directly
-				LogToFile(logPath, "=== STEP 1: TESTING MARKER FILE DIRECTLY ===");
-				TestMarkerFileDirectly(logPath, diagnosticDir);
-				
-				// Step 2: Test OpenCV dictionary capabilities
-				LogToFile(logPath, "\n=== STEP 2: TESTING OPENCV DICTIONARY CAPABILITIES ===");
-				TestOpenCVDictionaryCapabilities(logPath);
-				
-				// Step 3: Capture camera image and test detection
-				LogToFile(logPath, "\n=== STEP 3: TESTING CAMERA CAPTURE AND DETECTION ===");
-				TestCameraCaptureAndDetection(logPath, diagnosticDir);
-				
-				LogToFile(logPath, "\n=== TEST COMPLETED ===");
-				LogToFile(logPath, $"Test completed at: {DateTime.Now}");
-				
-				Dispatcher.Invoke(() => {
-					StatusText.Text = $"✅ Marker ID 0 test completed! Check: {diagnosticDir}";
-					StatusText.Foreground = new SolidColorBrush(Colors.Green);
-				});
-			}
-			catch (Exception ex)
-			{
-				LogToFile(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics", $"Marker0Test_{DateTime.Now:yyyyMMdd_HHmmss}", "marker0_test_log.txt"), $"CRITICAL ERROR: {ex.Message}\n{ex.StackTrace}");
-				throw;
-			}
-		}
 		
-		private void TestMarkerFileDirectly(string logPath, string diagnosticDir)
-		{
-			try
-			{
-				LogToFile(logPath, "Testing marker file: Assets/my/aruco_4x4_50_id_0.png");
-				
-				var markerPath = "pack://application:,,,/Assets/my/aruco_4x4_50_id_0.png";
-				var uri = new Uri(markerPath, UriKind.Absolute);
-				var bitmap = new BitmapImage(uri);
-				
-				LogToFile(logPath, $"Marker file loaded: {bitmap.Width}x{bitmap.Height}, DPI: {bitmap.DpiX}x{bitmap.DpiY}");
-				
-				// Convert to byte array
-				var encoder = new PngBitmapEncoder();
-				encoder.Frames.Add(BitmapFrame.Create(bitmap));
-				byte[] imageBytes;
-				using (var stream = new MemoryStream())
-				{
-					encoder.Save(stream);
-					imageBytes = stream.ToArray();
-				}
-				
-				LogToFile(logPath, $"Marker file size: {imageBytes.Length} bytes");
-				
-				// Load with OpenCV
-				using (var markerMat = Cv2.ImDecode(imageBytes, ImreadModes.Color))
-				{
-					LogToFile(logPath, $"OpenCV loaded: {markerMat.Width}x{markerMat.Height}, channels: {markerMat.Channels()}, type: {markerMat.Type()}");
-					
-					// Save the loaded image for inspection
-					var loadedImagePath = System.IO.Path.Combine(diagnosticDir, "00_loaded_marker.png");
-					Cv2.ImWrite(loadedImagePath, markerMat);
-					LogToFile(logPath, $"Saved loaded marker to: {loadedImagePath}");
-					
-					// Test with Dict4X4_50
-					using (var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50))
-					using (var gray = new Mat())
-					{
-						Cv2.CvtColor(markerMat, gray, ColorConversionCodes.BGR2GRAY);
-						
-						var parameters = new DetectorParameters();
-						parameters.AdaptiveThreshWinSizeMin = 3;
-						parameters.AdaptiveThreshWinSizeMax = 23;
-						parameters.AdaptiveThreshWinSizeStep = 10;
-						parameters.AdaptiveThreshConstant = 7;
-						parameters.MinMarkerPerimeterRate = 0.01;
-						parameters.MaxMarkerPerimeterRate = 8.0;
-						parameters.PolygonalApproxAccuracyRate = 0.05;
-						parameters.MinCornerDistanceRate = 0.01;
-						parameters.MinDistanceToBorder = 1;
-						parameters.MinMarkerDistanceRate = 0.01;
-						parameters.CornerRefinementMethod = CornerRefineMethod.Subpix;
-						parameters.CornerRefinementWinSize = 5;
-						parameters.CornerRefinementMaxIterations = 30;
-						parameters.CornerRefinementMinAccuracy = 0.1;
-						parameters.MarkerBorderBits = 1;
-						parameters.PerspectiveRemovePixelPerCell = 4;
-						parameters.PerspectiveRemoveIgnoredMarginPerCell = 0.13;
-						parameters.MaxErroneousBitsInBorderRate = 0.5;
-						parameters.MinOtsuStdDev = 2.0;
-						parameters.ErrorCorrectionRate = 0.3;
-						
-						Point2f[][] corners; int[] ids; Point2f[][] rejected;
-						CvAruco.DetectMarkers(gray, dict, out corners, out ids, parameters, out rejected);
-						
-						if (ids != null && ids.Length > 0)
-						{
-							LogToFile(logPath, $"✅ DETECTED: ID {ids[0]} (rejected: {rejected?.Length ?? 0})");
-							
-							// Save detection result
-							using (var result = markerMat.Clone())
-							{
-								CvAruco.DrawDetectedMarkers(result, corners, ids);
-								var resultPath = System.IO.Path.Combine(diagnosticDir, "detected_marker_0.png");
-								Cv2.ImWrite(resultPath, result);
-								LogToFile(logPath, $"Saved detection result to: {resultPath}");
-							}
-						}
-						else
-						{
-							LogToFile(logPath, $"❌ NOT DETECTED (rejected: {rejected?.Length ?? 0})");
-						}
-					}
-				}
-			}
-			catch (Exception ex)
-			{
-				LogToFile(logPath, $"ERROR in TestMarkerFileDirectly: {ex.Message}");
-			}
-		}
-		
-		private void TestOpenCVDictionaryCapabilities(string logPath)
-		{
-			try
-			{
-				LogToFile(logPath, "Testing OpenCV ArUco dictionary capabilities...");
-				
-				// Test all available dictionaries
-				var allDictionaries = new[]
-				{
-					PredefinedDictionaryName.Dict4X4_50,
-					PredefinedDictionaryName.Dict4X4_100,
-					PredefinedDictionaryName.Dict4X4_250,
-					PredefinedDictionaryName.Dict4X4_1000,
-					PredefinedDictionaryName.Dict5X5_50,
-					PredefinedDictionaryName.Dict5X5_100,
-					PredefinedDictionaryName.Dict5X5_250,
-					PredefinedDictionaryName.Dict5X5_1000,
-					PredefinedDictionaryName.Dict6X6_50,
-					PredefinedDictionaryName.Dict6X6_100,
-					PredefinedDictionaryName.Dict6X6_250,
-					PredefinedDictionaryName.Dict6X6_1000,
-					PredefinedDictionaryName.Dict7X7_50,
-					PredefinedDictionaryName.Dict7X7_100,
-					PredefinedDictionaryName.Dict7X7_250,
-					PredefinedDictionaryName.Dict7X7_1000
-				};
-				
-				foreach (var dictName in allDictionaries)
-				{
-					try
-					{
-						using (var dict = CvAruco.GetPredefinedDictionary(dictName))
-						{
-							LogToFile(logPath, $"✅ {dictName}: Available (size: {dict.MarkerSize})");
-						}
-					}
-					catch (Exception ex)
-					{
-						LogToFile(logPath, $"❌ {dictName}: Error - {ex.Message}");
-					}
-				}
-			}
-			catch (Exception ex)
-			{
-				LogToFile(logPath, $"ERROR in TestOpenCVDictionaryCapabilities: {ex.Message}");
-			}
-		}
-		
-		private void TestCameraCaptureAndDetection(string logPath, string diagnosticDir)
-		{
-			try
-			{
-				LogToFile(logPath, "Testing camera capture and detection...");
-				
-				if (kinectManager == null)
-				{
-					LogToFile(logPath, "❌ KinectManager is null - cannot capture camera image");
-					return;
-				}
-				
-				// Capture current camera frame
-				byte[] colorData;
-				int width, height, stride;
-				if (!kinectManager.TryGetColorFrameRaw(out colorData, out width, out height, out stride))
-				{
-					LogToFile(logPath, "❌ No color frame available from Kinect");
-					return;
-				}
-				
-				LogToFile(logPath, $"Captured color frame: {width}x{height}, stride: {stride}");
-				
-				// Convert to OpenCV Mat using a simpler approach
-				using (var bgr = new Mat(height, width, MatType.CV_8UC3))
-				{
-					// Copy data manually
-					for (int y = 0; y < height; y++)
-					{
-						for (int x = 0; x < width; x++)
-						{
-							int srcIndex = y * stride + x * 4; // BGRA format
-							int dstIndex = y * width * 3 + x * 3; // BGR format
-							
-							if (srcIndex + 2 < colorData.Length && dstIndex + 2 < bgr.Total() * 3)
-							{
-								bgr.Set(y, x, new Vec3b(colorData[srcIndex], colorData[srcIndex + 1], colorData[srcIndex + 2]));
-							}
-						}
-					}
-					
-					// Save original image
-					var originalPath = System.IO.Path.Combine(diagnosticDir, "01_camera_original.png");
-					Cv2.ImWrite(originalPath, bgr);
-					LogToFile(logPath, $"Saved original camera image to: {originalPath}");
-					
-					// CRITICAL FIX: Mirror the image horizontally to match projected markers
-					using (var mirrored = new Mat())
-					{
-						Cv2.Flip(bgr, mirrored, FlipMode.X); // Horizontal flip (mirror)
-						
-						// Save mirrored image
-						var mirroredPath = System.IO.Path.Combine(diagnosticDir, "01_camera_mirrored.png");
-						Cv2.ImWrite(mirroredPath, mirrored);
-						LogToFile(logPath, $"Saved mirrored camera image to: {mirroredPath}");
-						
-						// Test detection on mirrored image (this should work!)
-						TestDetectionOnImage(mirrored, "Mirrored Camera Image", logPath, diagnosticDir);
-					}
-					
-					// Also test original for comparison
-					TestDetectionOnImage(bgr, "Original Camera Image", logPath, diagnosticDir);
-				}
-			}
-			catch (Exception ex)
-			{
-				LogToFile(logPath, $"ERROR in TestCameraCaptureAndDetection: {ex.Message}");
-			}
-		}
-		
-		private void TestDetectionOnImage(Mat image, string imageName, string logPath, string diagnosticDir)
-		{
-			try
-			{
-				LogToFile(logPath, $"\n--- Testing detection on {imageName} ---");
-				LogToFile(logPath, $"Image: {image.Width}x{image.Height}, channels: {image.Channels()}, type: {image.Type()}");
-				
-				using (var gray = new Mat())
-				{
-					Cv2.CvtColor(image, gray, ColorConversionCodes.BGR2GRAY);
-					
-					// Test with Dict4X4_50 only (our target)
-					using (var dict = CvAruco.GetPredefinedDictionary(PredefinedDictionaryName.Dict4X4_50))
-					{
-						var parameters = new DetectorParameters();
-						parameters.AdaptiveThreshWinSizeMin = 3;
-						parameters.AdaptiveThreshWinSizeMax = 23;
-						parameters.AdaptiveThreshWinSizeStep = 10;
-						parameters.AdaptiveThreshConstant = 7;
-						parameters.MinMarkerPerimeterRate = 0.01;
-						parameters.MaxMarkerPerimeterRate = 8.0;
-						parameters.PolygonalApproxAccuracyRate = 0.05;
-						parameters.MinCornerDistanceRate = 0.01;
-						parameters.MinDistanceToBorder = 1;
-						parameters.MinMarkerDistanceRate = 0.01;
-						parameters.CornerRefinementMethod = CornerRefineMethod.Subpix;
-						parameters.CornerRefinementWinSize = 5;
-						parameters.CornerRefinementMaxIterations = 30;
-						parameters.CornerRefinementMinAccuracy = 0.1;
-						parameters.MarkerBorderBits = 1;
-						parameters.PerspectiveRemovePixelPerCell = 4;
-						parameters.PerspectiveRemoveIgnoredMarginPerCell = 0.13;
-						parameters.MaxErroneousBitsInBorderRate = 0.5;
-						parameters.MinOtsuStdDev = 2.0;
-						parameters.ErrorCorrectionRate = 0.3;
-						
-						Point2f[][] corners; int[] ids; Point2f[][] rejected;
-						CvAruco.DetectMarkers(gray, dict, out corners, out ids, parameters, out rejected);
-						
-						LogToFile(logPath, $"Detection results:");
-						LogToFile(logPath, $"  Found: {ids?.Length ?? 0} markers");
-						LogToFile(logPath, $"  Rejected: {rejected?.Length ?? 0} candidates");
-						
-						if (ids != null && ids.Length > 0)
-						{
-							LogToFile(logPath, $"  Detected IDs: [{string.Join(", ", ids)}]");
-							
-							// Check if ID 0 is detected
-							bool foundId0 = ids.Contains(0);
-							LogToFile(logPath, $"  Found ID 0: {(foundId0 ? "✅ YES" : "❌ NO")}");
-							
-							// Save detection result
-							using (var result = image.Clone())
-							{
-								CvAruco.DrawDetectedMarkers(result, corners, ids);
-								var resultPath = System.IO.Path.Combine(diagnosticDir, $"02_detection_{imageName.Replace(" ", "_")}.png");
-								Cv2.ImWrite(resultPath, result);
-								LogToFile(logPath, $"  Saved detection result to: {resultPath}");
-							}
-						}
-						else
-						{
-							LogToFile(logPath, "  ❌ No markers detected");
-						}
-					}
-				}
-			}
-			catch (Exception ex)
-			{
-				LogToFile(logPath, $"ERROR in TestDetectionOnImage: {ex.Message}");
-			}
-		}
 		
 		private void CalculateAndSaveTouchArea(Point2f[][] corners, int[] ids, string logPath)
 		{
@@ -2677,11 +2459,36 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					System.Diagnostics.Debug.WriteLine($"Red dot {i}: Camera({lastDetectedCentersColor[i].X:F1},{lastDetectedCentersColor[i].Y:F1}) -> Canvas({canvasPoints[i].X:F1},{canvasPoints[i].Y:F1})");
 				}
 				
-				// Create lines connecting the red dots to form a rectangle
+				// Sort markers by ID to ensure proper rectangular order: 0, 1, 2, 3
+				// Create a list of marker data with ID and position
+				var markerData = new List<(int id, System.Windows.Point position)>();
 				for (int i = 0; i < 4; i++)
 				{
-					var start = canvasPoints[i];
-					var end = canvasPoints[(i + 1) % 4];
+					// Get the marker ID from the detection result
+					int markerId = i < _detectedIds.Length ? _detectedIds[i] : i;
+					markerData.Add((markerId, canvasPoints[i]));
+				}
+				
+				// Sort by ID (0, 1, 2, 3)
+				markerData.Sort((a, b) => a.id.CompareTo(b.id));
+				
+				// Extract sorted positions
+				var sortedPoints = markerData.Select(m => m.position).ToArray();
+				
+				System.Diagnostics.Debug.WriteLine("Sorted marker positions for rectangle:");
+				for (int i = 0; i < 4; i++)
+				{
+					System.Diagnostics.Debug.WriteLine($"  Marker {i}: ({sortedPoints[i].X:F1}, {sortedPoints[i].Y:F1})");
+				}
+				
+				// Create lines connecting the red dots in proper rectangular order
+				// Order: Top-left (0) -> Top-right (1) -> Bottom-right (2) -> Bottom-left (3) -> Top-left (0)
+				var rectangleOrder = new int[] { 0, 1, 2, 3, 0 }; // Last 0 to close the rectangle
+				
+				for (int i = 0; i < 4; i++)
+				{
+					var start = sortedPoints[rectangleOrder[i]];
+					var end = sortedPoints[rectangleOrder[i + 1]];
 					
 					var line = new System.Windows.Shapes.Line
 					{
@@ -2704,6 +2511,606 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				System.Diagnostics.Debug.WriteLine($"Error drawing rectangle from red dots: {ex.Message}");
 			}
+		}
+		
+		private void MonitoringTimer_Tick(object sender, EventArgs e)
+		{
+			try
+			{
+				UpdateRealTimeMonitoring();
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"Error in monitoring timer: {ex.Message}");
+			}
+		}
+		
+		private void UpdateRealTimeMonitoring()
+		{
+			try
+			{
+				// Update Kinect distance monitoring
+				UpdateDistanceMonitoring();
+				
+				// Update marker size monitoring
+				UpdateMarkerSizeMonitoring();
+				
+				// Update calibration quality monitoring
+				UpdateQualityMonitoring();
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"Error updating real-time monitoring: {ex.Message}");
+			}
+		}
+		
+		private void UpdateDistanceMonitoring()
+		{
+			if (kinectManager == null || !kinectManager.IsInitialized)
+			{
+				DistanceText.Text = "-- m";
+				DistanceStatus.Text = "Kinect not available";
+				DistanceStatus.Foreground = System.Windows.Media.Brushes.Red;
+				return;
+			}
+			
+			// Get current distance from center of camera view
+			int centerX = kinectManager.ColorWidth / 2;
+			int centerY = kinectManager.ColorHeight / 2;
+			
+			CameraSpacePoint cameraPoint;
+			if (kinectManager.TryMapColorPixelToCameraSpace(centerX, centerY, out cameraPoint))
+			{
+				if (!float.IsNaN(cameraPoint.Z) && cameraPoint.Z > 0)
+				{
+					double distanceMeters = cameraPoint.Z;
+					DistanceText.Text = $"{distanceMeters:F2} m";
+					
+					// Color code based on distance
+					if (distanceMeters < 0.5)
+					{
+						DistanceStatus.Text = "Too close";
+						DistanceStatus.Foreground = System.Windows.Media.Brushes.Red;
+					}
+					else if (distanceMeters > 4.0)
+					{
+						DistanceStatus.Text = "Too far";
+						DistanceStatus.Foreground = System.Windows.Media.Brushes.Orange;
+					}
+					else
+					{
+						DistanceStatus.Text = "Good range";
+						DistanceStatus.Foreground = System.Windows.Media.Brushes.Green;
+					}
+				}
+				else
+				{
+					DistanceText.Text = "-- m";
+					DistanceStatus.Text = "No depth data";
+					DistanceStatus.Foreground = System.Windows.Media.Brushes.Gray;
+				}
+			}
+			else
+			{
+				DistanceText.Text = "-- m";
+				DistanceStatus.Text = "Mapping failed";
+				DistanceStatus.Foreground = System.Windows.Media.Brushes.Red;
+			}
+		}
+		
+		private void UpdateMarkerSizeMonitoring()
+		{
+			if (_detectedCorners == null || _detectedCorners.Length == 0)
+			{
+				MarkerSizeText.Text = "-- px";
+				MarkerSizeStatus.Text = "No markers detected";
+				MarkerSizeStatus.Foreground = System.Windows.Media.Brushes.Gray;
+				return;
+			}
+			
+			// Calculate average marker size
+			double totalSize = 0;
+			int validMarkers = 0;
+			
+			for (int i = 0; i < _detectedCorners.Length; i++)
+			{
+				var quad = _detectedCorners[i];
+				double width = Math.Sqrt(Math.Pow(quad[1].X - quad[0].X, 2) + Math.Pow(quad[1].Y - quad[0].Y, 2));
+				double height = Math.Sqrt(Math.Pow(quad[3].X - quad[0].X, 2) + Math.Pow(quad[3].Y - quad[0].Y, 2));
+				double size = (width + height) / 2.0;
+				
+				if (size > 0)
+				{
+					totalSize += size;
+					validMarkers++;
+				}
+			}
+			
+			if (validMarkers > 0)
+			{
+				double avgSize = totalSize / validMarkers;
+				MarkerSizeText.Text = $"{avgSize:F0} px";
+				
+				// Validate marker size
+				if (avgSize < 20)
+				{
+					MarkerSizeStatus.Text = "Too small";
+					MarkerSizeStatus.Foreground = System.Windows.Media.Brushes.Red;
+				}
+				else if (avgSize > 200)
+				{
+					MarkerSizeStatus.Text = "Too large";
+					MarkerSizeStatus.Foreground = System.Windows.Media.Brushes.Orange;
+				}
+				else
+				{
+					MarkerSizeStatus.Text = "Good size";
+					MarkerSizeStatus.Foreground = System.Windows.Media.Brushes.Green;
+				}
+			}
+			else
+			{
+				MarkerSizeText.Text = "-- px";
+				MarkerSizeStatus.Text = "Invalid markers";
+				MarkerSizeStatus.Foreground = System.Windows.Media.Brushes.Red;
+			}
+		}
+		
+		private void UpdateQualityMonitoring()
+		{
+			if (_detectedCorners == null || _detectedCorners.Length < 4)
+			{
+				QualityText.Text = "--";
+				QualityStatus.Text = "Need 4 markers";
+				QualityStatus.Foreground = System.Windows.Media.Brushes.Gray;
+				return;
+			}
+			
+			// Calculate basic quality metrics
+			var qualityScore = CalculateBasicQualityScore();
+			QualityText.Text = $"{qualityScore:F1}";
+			
+			// Color code quality
+			if (qualityScore >= 0.8)
+			{
+				QualityStatus.Text = "Excellent";
+				QualityStatus.Foreground = System.Windows.Media.Brushes.Green;
+				QualityText.Foreground = System.Windows.Media.Brushes.Green;
+			}
+			else if (qualityScore >= 0.6)
+			{
+				QualityStatus.Text = "Good";
+				QualityStatus.Foreground = System.Windows.Media.Brushes.Orange;
+				QualityText.Foreground = System.Windows.Media.Brushes.Orange;
+			}
+			else
+			{
+				QualityStatus.Text = "Poor";
+				QualityStatus.Foreground = System.Windows.Media.Brushes.Red;
+				QualityText.Foreground = System.Windows.Media.Brushes.Red;
+			}
+		}
+		
+		private double CalculateBasicQualityScore()
+		{
+			try
+			{
+				if (_detectedCorners == null || _detectedCorners.Length < 4) return 0.0;
+				
+				// Calculate marker size consistency
+				var sizes = new List<double>();
+				for (int i = 0; i < _detectedCorners.Length; i++)
+				{
+					var quad = _detectedCorners[i];
+					double width = Math.Sqrt(Math.Pow(quad[1].X - quad[0].X, 2) + Math.Pow(quad[1].Y - quad[0].Y, 2));
+					double height = Math.Sqrt(Math.Pow(quad[3].X - quad[0].X, 2) + Math.Pow(quad[3].Y - quad[0].Y, 2));
+					double size = (width + height) / 2.0;
+					if (size > 0) sizes.Add(size);
+				}
+				
+				if (sizes.Count < 4) return 0.0;
+				
+				// Size consistency score
+				double avgSize = sizes.Average();
+				double sizeVariance = sizes.StandardDeviation() / avgSize;
+				double sizeScore = Math.Max(0, 1.0 - sizeVariance);
+				
+				// Rectangle quality score (simplified)
+				double rectangleScore = CalculateRectangleQualityFromCurrentMarkers();
+				
+				// Combined score
+				return (sizeScore * 0.6 + rectangleScore * 0.4);
+			}
+			catch
+			{
+				return 0.0;
+			}
+		}
+		
+		private double CalculateRectangleQualityFromCurrentMarkers()
+		{
+			try
+			{
+				if (_detectedCorners == null || _detectedCorners.Length < 4) return 0.0;
+				
+				// Get marker centers
+				var centers = new List<System.Windows.Point>();
+				for (int i = 0; i < _detectedCorners.Length && i < _detectedIds.Length; i++)
+				{
+					var quad = _detectedCorners[i];
+					double cx = (quad[0].X + quad[1].X + quad[2].X + quad[3].X) / 4.0;
+					double cy = (quad[0].Y + quad[1].Y + quad[2].Y + quad[3].Y) / 4.0;
+					centers.Add(new System.Windows.Point(cx, cy));
+				}
+				
+				if (centers.Count < 4) return 0.0;
+				
+				// Sort by ID if available
+				if (_detectedIds != null && _detectedIds.Length >= 4)
+				{
+					var sortedCenters = new List<System.Windows.Point>();
+					for (int id = 0; id < 4; id++)
+					{
+						for (int i = 0; i < _detectedIds.Length; i++)
+						{
+							if (_detectedIds[i] == id)
+							{
+								sortedCenters.Add(centers[i]);
+								break;
+							}
+						}
+					}
+					centers = sortedCenters;
+				}
+				
+				return CalculateRectangleQuality(centers);
+			}
+			catch
+			{
+				return 0.0;
+			}
+		}
+		
+		private void CalculateTouchAreaAndKinectDistance(CalibrationConfig cfg, Point2f[][] corners, int[] ids)
+		{
+			try
+			{
+				System.Diagnostics.Debug.WriteLine("=== COMPREHENSIVE TOUCH AREA AND KINECT DISTANCE CALCULATION ===");
+				
+				if (cfg == null)
+				{
+					throw new ArgumentNullException(nameof(cfg), "CalibrationConfig cannot be null");
+				}
+				
+				if (corners == null || corners.Length == 0)
+				{
+					throw new ArgumentException("No corners provided for calculation");
+				}
+				
+				if (ids == null || ids.Length == 0)
+				{
+					throw new ArgumentException("No marker IDs provided for calculation");
+				}
+				
+				// Create a dictionary to map marker IDs to their centers and 3D data
+				var markerData = new Dictionary<int, (System.Windows.Point center, double size, CameraSpacePoint? depth3D)>();
+				
+				int colorWidth = kinectManager?.ColorWidth ?? 1920;
+				int colorHeight = kinectManager?.ColorHeight ?? 1080;
+				
+				for (int i = 0; i < corners.Length && i < ids.Length; i++)
+				{
+					int markerId = ids[i];
+					var quad = corners[i];
+					
+					// Calculate center of the marker
+					double cx = (quad[0].X + quad[1].X + quad[2].X + quad[3].X) / 4.0;
+					double cy = (quad[0].Y + quad[1].Y + quad[2].Y + quad[3].Y) / 4.0;
+					
+					// Calculate marker size (average of width and height)
+					double width = Math.Sqrt(Math.Pow(quad[1].X - quad[0].X, 2) + Math.Pow(quad[1].Y - quad[0].Y, 2));
+					double height = Math.Sqrt(Math.Pow(quad[3].X - quad[0].X, 2) + Math.Pow(quad[3].Y - quad[0].Y, 2));
+					double size = (width + height) / 2.0;
+					
+					// Get 3D depth data for this marker center using available Kinect methods
+					CameraSpacePoint? depth3D = null;
+					if (kinectManager != null && kinectManager.IsInitialized)
+					{
+						CameraSpacePoint cameraPoint;
+						if (kinectManager.TryMapColorPixelToCameraSpace((int)cx, (int)cy, out cameraPoint))
+						{
+							if (!float.IsNaN(cameraPoint.Z) && cameraPoint.Z > 0)
+							{
+								depth3D = cameraPoint;
+							}
+						}
+					}
+					
+					markerData[markerId] = (new System.Windows.Point(cx, cy), size, depth3D);
+					
+					System.Diagnostics.Debug.WriteLine($"Marker ID {markerId}: Center=({cx:F1},{cy:F1}), Size={size:F1}px, Depth3D={depth3D?.Z:F3}m");
+				}
+				
+				// Calculate touch area rectangle
+				var sortedMarkers = markerData.OrderBy(kvp => kvp.Key).ToList();
+				if (sortedMarkers.Count == 4)
+				{
+					var topLeft = sortedMarkers[0].Value.center;
+					var topRight = sortedMarkers[1].Value.center;
+					var bottomRight = sortedMarkers[2].Value.center;
+					var bottomLeft = sortedMarkers[3].Value.center;
+					
+					// Calculate the bounding rectangle
+					double minX = Math.Min(Math.Min(topLeft.X, topRight.X), Math.Min(bottomLeft.X, bottomRight.X));
+					double maxX = Math.Max(Math.Max(topLeft.X, topRight.X), Math.Max(bottomLeft.X, bottomRight.X));
+					double minY = Math.Min(Math.Min(topLeft.Y, topRight.Y), Math.Min(bottomLeft.Y, bottomRight.Y));
+					double maxY = Math.Max(Math.Max(topLeft.Y, topRight.Y), Math.Max(bottomLeft.Y, bottomRight.Y));
+					
+					var touchArea = new System.Windows.Rect(minX, minY, maxX - minX, maxY - minY);
+					
+					// Calculate Kinect distance to surface
+					double kinectDistance = 0.0;
+					var validDepths = sortedMarkers.Where(m => m.Value.depth3D.HasValue).ToList();
+					if (validDepths.Count > 0)
+					{
+						kinectDistance = validDepths.Average(m => m.Value.depth3D.Value.Z);
+					}
+					
+					// Calculate physical dimensions of touch area
+					double touchAreaWidthMeters = 0.0;
+					double touchAreaHeightMeters = 0.0;
+					if (kinectDistance > 0 && validDepths.Count >= 2)
+					{
+						// Estimate physical size based on distance and pixel size
+						// This is an approximation - for more accuracy, you'd need camera intrinsics
+						double pixelToMeterRatio = kinectDistance / 1000.0; // Rough approximation
+						touchAreaWidthMeters = touchArea.Width * pixelToMeterRatio;
+						touchAreaHeightMeters = touchArea.Height * pixelToMeterRatio;
+					}
+					
+					// Calculate average marker size
+					double avgMarkerSize = sortedMarkers.Average(m => m.Value.size);
+					
+					// Calculate calibration accuracy score (0-1)
+					double accuracyScore = CalculateCalibrationAccuracy(sortedMarkers, kinectDistance);
+					
+					// Store all calculated data in calibration config
+					cfg.TouchArea = new TouchAreaDefinition(touchArea.X, touchArea.Y, touchArea.Width, touchArea.Height, colorWidth, colorHeight);
+					cfg.ArUcoMarkerCenters = sortedMarkers.Select(m => m.Value.center).ToList();
+					cfg.ArUcoMarkerIds = sortedMarkers.Select(m => m.Key).ToList();
+					cfg.TouchAreaCalculatedUtc = DateTime.UtcNow;
+					cfg.KinectToSurfaceDistanceMeters = kinectDistance;
+					cfg.TouchDetectionThresholdMeters = Math.Max(0.02, kinectDistance * 0.05); // 5% of distance or 2cm minimum
+					cfg.TouchAreaWidthMeters = touchAreaWidthMeters;
+					cfg.TouchAreaHeightMeters = touchAreaHeightMeters;
+					cfg.TouchAreaCorners3D = validDepths.Select(m => new SerializableCameraSpacePoint(m.Value.depth3D.Value)).ToList();
+					cfg.AverageMarkerSizePixels = avgMarkerSize;
+					cfg.CalibrationAccuracyScore = accuracyScore;
+					
+					System.Diagnostics.Debug.WriteLine($"Touch Area: {touchArea.Width:F0}x{touchArea.Height:F0} pixels");
+					System.Diagnostics.Debug.WriteLine($"Kinect Distance: {kinectDistance:F3} meters");
+					System.Diagnostics.Debug.WriteLine($"Physical Size: {touchAreaWidthMeters:F3}x{touchAreaHeightMeters:F3} meters");
+					System.Diagnostics.Debug.WriteLine($"Touch Threshold: {cfg.TouchDetectionThresholdMeters:F3} meters");
+					System.Diagnostics.Debug.WriteLine($"Calibration Accuracy: {accuracyScore:F2}");
+					
+					// Update status
+					Dispatcher.Invoke(() => {
+						StatusText.Text = $"Status: Touch area calculated! Distance: {kinectDistance:F2}m, Size: {touchAreaWidthMeters:F2}x{touchAreaHeightMeters:F2}m";
+						StatusText.Foreground = Brushes.Green;
+					});
+				}
+				else
+				{
+					System.Diagnostics.Debug.WriteLine($"ERROR: Expected 4 markers, got {sortedMarkers.Count}");
+				}
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"ERROR in CalculateTouchAreaAndKinectDistance: {ex.Message}");
+			}
+		}
+		
+		private double CalculateCalibrationAccuracy(List<KeyValuePair<int, (System.Windows.Point center, double size, CameraSpacePoint? depth3D)>> markers, double avgDistance)
+		{
+			try
+			{
+				// Calculate accuracy based on several factors:
+				// 1. Marker size consistency (should be similar)
+				// 2. Distance consistency (all markers should be roughly same distance)
+				// 3. Rectangle shape quality (should form a proper rectangle)
+				
+				if (markers.Count != 4) return 0.0;
+				
+				// Factor 1: Marker size consistency
+				var sizes = markers.Select(m => m.Value.size).ToList();
+				double sizeVariance = sizes.StandardDeviation() / sizes.Average();
+				double sizeScore = Math.Max(0, 1.0 - sizeVariance);
+				
+				// Factor 2: Distance consistency
+				var validDepths = markers.Where(m => m.Value.depth3D.HasValue).Select(m => (double)m.Value.depth3D.Value.Z).ToList();
+				double distanceScore = 1.0;
+				if (validDepths.Count > 1)
+				{
+					double distanceVariance = validDepths.StandardDeviation() / validDepths.Average();
+					distanceScore = Math.Max(0, 1.0 - distanceVariance * 2); // More strict on distance
+				}
+				
+				// Factor 3: Rectangle quality (check if corners form roughly 90-degree angles)
+				var centers = markers.OrderBy(m => m.Key).Select(m => m.Value.center).ToList();
+				double rectangleScore = CalculateRectangleQuality(centers);
+				
+				// Weighted average
+				double accuracy = (sizeScore * 0.3 + distanceScore * 0.4 + rectangleScore * 0.3);
+				return Math.Max(0, Math.Min(1, accuracy));
+			}
+			catch
+			{
+				return 0.5; // Default moderate accuracy if calculation fails
+			}
+		}
+		
+		private double CalculateRectangleQuality(List<System.Windows.Point> corners)
+		{
+			try
+			{
+				if (corners.Count != 4) return 0.0;
+				
+				// Check if the corners form roughly right angles
+				// This is a simplified check - in practice you'd want more sophisticated geometry
+				var topLeft = corners[0];
+				var topRight = corners[1];
+				var bottomRight = corners[2];
+				var bottomLeft = corners[3];
+				
+				// Calculate side lengths
+				double topLength = Math.Sqrt(Math.Pow(topRight.X - topLeft.X, 2) + Math.Pow(topRight.Y - topLeft.Y, 2));
+				double bottomLength = Math.Sqrt(Math.Pow(bottomRight.X - bottomLeft.X, 2) + Math.Pow(bottomRight.Y - bottomLeft.Y, 2));
+				double leftLength = Math.Sqrt(Math.Pow(bottomLeft.X - topLeft.X, 2) + Math.Pow(bottomLeft.Y - topLeft.Y, 2));
+				double rightLength = Math.Sqrt(Math.Pow(bottomRight.X - topRight.X, 2) + Math.Pow(bottomRight.Y - topRight.Y, 2));
+				
+				// Check if opposite sides are roughly equal length
+				double topBottomRatio = Math.Min(topLength, bottomLength) / Math.Max(topLength, bottomLength);
+				double leftRightRatio = Math.Min(leftLength, rightLength) / Math.Max(leftLength, rightLength);
+				
+				// Good rectangle should have ratios close to 1.0
+				return (topBottomRatio + leftRightRatio) / 2.0;
+			}
+			catch
+			{
+				return 0.5;
+			}
+		}
+		
+		private bool ValidateTouchArea(CalibrationConfig cfg, string diagnosticPath)
+		{
+			try
+			{
+				LogToFile(diagnosticPath, "Validating touch area parameters...");
+				
+				// Check if touch area has valid dimensions
+				if (cfg.TouchArea.Width <= 0 || cfg.TouchArea.Height <= 0)
+				{
+					LogToFile(diagnosticPath, "ERROR: Touch area has invalid dimensions");
+					return false;
+				}
+				
+				// Check if touch area is within camera bounds
+				if (cfg.TouchArea.X < 0 || cfg.TouchArea.Y < 0 || 
+					cfg.TouchArea.Right > cfg.TouchArea.CameraWidth || 
+					cfg.TouchArea.Bottom > cfg.TouchArea.CameraHeight)
+				{
+					LogToFile(diagnosticPath, "ERROR: Touch area extends beyond camera bounds");
+					return false;
+				}
+				
+				// Check if Kinect distance is reasonable
+				if (cfg.KinectToSurfaceDistanceMeters <= 0 || cfg.KinectToSurfaceDistanceMeters > 10)
+				{
+					LogToFile(diagnosticPath, "ERROR: Kinect distance is out of reasonable range");
+					return false;
+				}
+				
+				// Check if physical dimensions are reasonable
+				if (cfg.TouchAreaWidthMeters <= 0 || cfg.TouchAreaHeightMeters <= 0 ||
+					cfg.TouchAreaWidthMeters > 5 || cfg.TouchAreaHeightMeters > 5)
+				{
+					LogToFile(diagnosticPath, "ERROR: Physical dimensions are out of reasonable range");
+					return false;
+				}
+				
+				// Check if touch threshold is reasonable
+				if (cfg.TouchDetectionThresholdMeters <= 0 || cfg.TouchDetectionThresholdMeters > 1)
+				{
+					LogToFile(diagnosticPath, "ERROR: Touch detection threshold is out of reasonable range");
+					return false;
+				}
+				
+				// Check if we have 3D corner points
+				if (cfg.TouchAreaCorners3D == null || cfg.TouchAreaCorners3D.Count < 2)
+				{
+					LogToFile(diagnosticPath, "WARNING: Limited 3D corner point data");
+				}
+				
+				LogToFile(diagnosticPath, "Touch area validation PASSED");
+				return true;
+			}
+			catch (Exception ex)
+			{
+				LogToFile(diagnosticPath, $"ERROR in touch area validation: {ex.Message}");
+				return false;
+			}
+		}
+		
+		private bool VerifyKinectTouchArea(CalibrationConfig cfg, string diagnosticPath)
+		{
+			try
+			{
+				LogToFile(diagnosticPath, "Verifying Kinect touch sensor area...");
+				
+				if (kinectManager == null || !kinectManager.IsInitialized)
+				{
+					LogToFile(diagnosticPath, "ERROR: Kinect not available for verification");
+					return false;
+				}
+				
+				// Test touch area corners for depth data availability
+				var testPoints = new System.Windows.Point[]
+				{
+					new System.Windows.Point(cfg.TouchArea.Left, cfg.TouchArea.Top),      // Top-left
+					new System.Windows.Point(cfg.TouchArea.Right, cfg.TouchArea.Top),     // Top-right
+					new System.Windows.Point(cfg.TouchArea.Left, cfg.TouchArea.Bottom),   // Bottom-left
+					new System.Windows.Point(cfg.TouchArea.Right, cfg.TouchArea.Bottom),  // Bottom-right
+					new System.Windows.Point(cfg.TouchArea.X + cfg.TouchArea.Width/2, cfg.TouchArea.Y + cfg.TouchArea.Height/2) // Center
+				};
+				
+				int validDepthPoints = 0;
+				foreach (var point in testPoints)
+				{
+					CameraSpacePoint cameraPoint;
+					if (kinectManager.TryMapColorPixelToCameraSpace((int)point.X, (int)point.Y, out cameraPoint))
+					{
+						if (!float.IsNaN(cameraPoint.Z) && cameraPoint.Z > 0)
+						{
+							validDepthPoints++;
+							LogToFile(diagnosticPath, $"Point ({point.X:F0},{point.Y:F0}) -> Depth: {cameraPoint.Z:F3}m");
+						}
+						else
+						{
+							LogToFile(diagnosticPath, $"Point ({point.X:F0},{point.Y:F0}) -> No depth data");
+						}
+					}
+					else
+					{
+						LogToFile(diagnosticPath, $"Point ({point.X:F0},{point.Y:F0}) -> Mapping failed");
+					}
+				}
+				
+				// Verify that we have depth data for at least 3 out of 5 test points
+				bool verificationPassed = validDepthPoints >= 3;
+				LogToFile(diagnosticPath, $"Depth data available for {validDepthPoints}/5 test points");
+				LogToFile(diagnosticPath, $"Kinect touch area verification: {(verificationPassed ? "PASSED" : "FAILED")}");
+				
+				return verificationPassed;
+			}
+			catch (Exception ex)
+			{
+				LogToFile(diagnosticPath, $"ERROR in Kinect touch area verification: {ex.Message}");
+				return false;
+			}
+		}
+	}
+	
+	// Extension method for calculating standard deviation
+	public static class MathExtensions
+	{
+		public static double StandardDeviation(this IEnumerable<double> values)
+		{
+			var valuesList = values.ToList();
+			if (valuesList.Count == 0) return 0.0;
+			
+			double mean = valuesList.Average();
+			double sumOfSquares = valuesList.Sum(x => Math.Pow(x - mean, 2));
+			return Math.Sqrt(sumOfSquares / valuesList.Count);
 		}
 	}
 }

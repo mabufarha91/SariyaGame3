@@ -14,11 +14,11 @@ namespace KinectCalibrationWPF.Models
 		[DataMember]
 		public List<Point> CornerPointsNormalized { get; set; } // order: TL, TR, BR, BL in normalized [0..1]
 		[DataMember]
-		public List<CameraSpacePoint> CornerPointsCamera { get; set; } // mapped 3D points corresponding to normals
+		public List<SerializableCameraSpacePoint> CornerPointsCamera { get; set; } // mapped 3D points corresponding to normals
 		[DataMember]
 		public double PlaneThresholdMeters { get; set; }
 		[DataMember]
-		public double[,] SensorToWorldTransform { get; set; } // 4x4 row-major
+		public double[] SensorToWorldTransform { get; set; } // 4x4 row-major as 1D array
 		[DataMember]
 		public DateTime SavedUtc { get; set; }
 
@@ -42,7 +42,7 @@ namespace KinectCalibrationWPF.Models
 		[DataMember]
 		public List<Point> CameraMarkerCornersTL { get; set; } // top-left corners sorted by ID
 		[DataMember]
-		public double[,] PerspectiveTransform3x3 { get; set; } // 3x3 row-major
+		public double[] PerspectiveTransform3x3 { get; set; } // 3x3 row-major
 
 		// Screen 2 Touch Area Detection
 		[DataMember]
@@ -53,14 +53,30 @@ namespace KinectCalibrationWPF.Models
 		public List<int> ArUcoMarkerIds { get; set; } // IDs of detected ArUco markers
 		[DataMember]
 		public DateTime TouchAreaCalculatedUtc { get; set; } // When touch area was calculated
+		
+		// Enhanced Kinect Distance and Touch Detection Parameters
+		[DataMember]
+		public double KinectToSurfaceDistanceMeters { get; set; } // Distance from Kinect sensor to touch surface
+		[DataMember]
+		public double TouchDetectionThresholdMeters { get; set; } // How close to surface to detect touch
+		[DataMember]
+		public double TouchAreaWidthMeters { get; set; } // Physical width of touch area in meters
+		[DataMember]
+		public double TouchAreaHeightMeters { get; set; } // Physical height of touch area in meters
+		[DataMember]
+		public List<SerializableCameraSpacePoint> TouchAreaCorners3D { get; set; } // 3D coordinates of touch area corners
+		[DataMember]
+		public double AverageMarkerSizePixels { get; set; } // Average size of detected markers in pixels
+		[DataMember]
+		public double CalibrationAccuracyScore { get; set; } // Quality score of calibration (0-1)
 
 		public CalibrationConfig()
 		{
 			CornerPointsNormalized = new List<Point>();
-			CornerPointsCamera = new List<CameraSpacePoint>();
+			CornerPointsCamera = new List<SerializableCameraSpacePoint>();
 			Plane = new PlaneDefinition();
 			PlaneThresholdMeters = 0.03; // default 3 cm
-			SensorToWorldTransform = CreateIdentity4x4();
+			SensorToWorldTransform = CreateIdentity4x4As1D();
 			SavedUtc = DateTime.UtcNow;
 			ProjectorMarkerPositions = new List<Point>();
 			DetectedMarkerCentersColor = new List<Point>();
@@ -75,22 +91,31 @@ namespace KinectCalibrationWPF.Models
 			TouchAreaCalculatedUtc = DateTime.MinValue;
 			ProjectorMarkerCenters = new List<Point>();
 			CameraMarkerCornersTL = new List<Point>();
-			PerspectiveTransform3x3 = new double[3,3]
+			PerspectiveTransform3x3 = new double[9]
 			{
-				{1,0,0},
-				{0,1,0},
-				{0,0,1}
+				1,0,0,
+				0,1,0,
+				0,0,1
 			};
+			
+			// Initialize enhanced Kinect parameters
+			KinectToSurfaceDistanceMeters = 0.0;
+			TouchDetectionThresholdMeters = 0.05; // Default 5cm threshold
+			TouchAreaWidthMeters = 0.0;
+			TouchAreaHeightMeters = 0.0;
+			TouchAreaCorners3D = new List<SerializableCameraSpacePoint>();
+			AverageMarkerSizePixels = 0.0;
+			CalibrationAccuracyScore = 0.0;
 		}
 
-		private static double[,] CreateIdentity4x4()
+		private static double[] CreateIdentity4x4As1D()
 		{
-			return new double[4,4]
+			return new double[16]
 			{
-				{1,0,0,0},
-				{0,1,0,0},
-				{0,0,1,0},
-				{0,0,0,1}
+				1,0,0,0,
+				0,1,0,0,
+				0,0,1,0,
+				0,0,0,1
 			};
 		}
 	}
@@ -151,6 +176,38 @@ namespace KinectCalibrationWPF.Models
 			Bottom = y + height;
 			CameraWidth = cameraWidth;
 			CameraHeight = cameraHeight;
+		}
+	}
+	
+	[DataContract]
+	public class SerializableCameraSpacePoint
+	{
+		[DataMember]
+		public float X { get; set; }
+		[DataMember]
+		public float Y { get; set; }
+		[DataMember]
+		public float Z { get; set; }
+		
+		public SerializableCameraSpacePoint() { }
+		
+		public SerializableCameraSpacePoint(float x, float y, float z)
+		{
+			X = x;
+			Y = y;
+			Z = z;
+		}
+		
+		public SerializableCameraSpacePoint(CameraSpacePoint point)
+		{
+			X = point.X;
+			Y = point.Y;
+			Z = point.Z;
+		}
+		
+		public CameraSpacePoint ToCameraSpacePoint()
+		{
+			return new CameraSpacePoint { X = X, Y = Y, Z = Z };
 		}
 	}
 }

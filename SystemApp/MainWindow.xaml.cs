@@ -1,3 +1,4 @@
+using System;
 using System.Windows;
 using System.Windows.Input;
 using KinectCalibrationWPF.Services;
@@ -48,7 +49,11 @@ namespace KinectCalibrationWPF
                     System.Diagnostics.Debug.WriteLine("Calibration loaded at startup.");
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Could not load calibration at startup: {ex.Message}");
+                // This is not critical - the app can run without existing calibration
+            }
         }
 
         protected override void OnClosed(System.EventArgs e)

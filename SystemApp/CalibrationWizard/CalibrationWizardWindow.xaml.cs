@@ -8,6 +8,7 @@ using Microsoft.Kinect;
 using System.Collections.Generic;
 using KinectCalibrationWPF.Models;
 using KinectCalibrationWPF.Services;
+using System.Linq;
 
 namespace KinectCalibrationWPF.CalibrationWizard
 {
@@ -128,7 +129,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			calibrationConfig.CornerPointsCamera.Clear();
 			if (finalCameraCorners != null)
 			{
-				calibrationConfig.CornerPointsCamera.AddRange(finalCameraCorners);
+				calibrationConfig.CornerPointsCamera.AddRange(finalCameraCorners.Select(p => new SerializableCameraSpacePoint(p)));
 			}
 			else if (kinectManager != null && kinectManager.IsInitialized && pts != null)
 			{
@@ -138,7 +139,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					CameraSpacePoint camPt;
 					if (kinectManager.TryMapColorPixelToCameraSpace((int)Math.Round(colorPt.X), (int)Math.Round(colorPt.Y), out camPt))
 					{
-						calibrationConfig.CornerPointsCamera.Add(camPt);
+						calibrationConfig.CornerPointsCamera.Add(new SerializableCameraSpacePoint(camPt));
 					}
 				}
 			}
@@ -553,7 +554,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			// Persist finalized corners
 			finalCameraCorners = camPts;
 			calibrationConfig.CornerPointsCamera.Clear();
-			calibrationConfig.CornerPointsCamera.AddRange(camPts);
+			calibrationConfig.CornerPointsCamera.AddRange(camPts.Select(p => new SerializableCameraSpacePoint(p)));
 			calibrationConfig.Plane = new KinectCalibrationWPF.Models.PlaneDefinition { Nx = n.X, Ny = n.Y, Nz = n.Z, D = planeDistance };
 
 			// Draw polygon strictly from 3D → color → canvas for the four corners (matches red dots order)
