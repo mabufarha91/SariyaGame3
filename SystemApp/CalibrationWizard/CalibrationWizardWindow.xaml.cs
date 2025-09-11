@@ -28,6 +28,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			InitializeComponent();
 			this.kinectManager = kinectManager;
 			
+			// Initialize Screen 1 diagnostics
+			InitializeScreen1Diagnostics();
+			
 			InitializeCameraFeed();
 			UpdateCameraStatus();
 
@@ -115,6 +118,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		
 		private void NextButton_Click(object sender, RoutedEventArgs e)
 		{
+			// Log depth data diagnostic before proceeding
+			LogDepthDataDiagnostic();
+			
 			// Save screen 1 results into calibration config (use finalized data if available)
 			if (planeNormal.HasValue)
 			{
@@ -143,6 +149,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					}
 				}
 			}
+			
+			// Log calibration save diagnostic
+			LogCalibrationSaveDiagnostic();
+			
 			// Persist immediately when proceeding to next screen
 			try { CalibrationStorage.Save(calibrationConfig); } catch { }
 			// Go to Screen 2
@@ -185,6 +195,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				MovablePoints.SetOverlay(null);
 			}
+			
+			// Log point placement diagnostic
+			if (e.Points != null && e.Points.Count > 0)
+			{
+				var lastPoint = e.Points[e.Points.Count - 1];
+				LogPointPlacementDiagnostic(lastPoint, e.Points.Count - 1);
+			}
 		}
 
 		private void MovablePoints_PlaneRecalculated(object sender, EventArgs e)
@@ -197,6 +214,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				DrawFinalPolygonFromCameraPoints();
 			}
+			
+			// Note: Plane calculation diagnostic is logged in FinalizeAreaFromFourPoints()
+			// where the actual plane calculation happens
 		}
 
 		private void MovablePoints_StatusChanged(object sender, UI.StatusChangedEventArgs e)
@@ -565,6 +585,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			StatusText.Foreground = Brushes.Green;
 			UpdateMeasures(camPts, ptsCanvas);
 			UpdateButtonStates(true);
+			
+			// Log plane calculation diagnostic with actual results
+			LogPlaneCalculationDiagnostic(camPts, n, planeDistance);
 		}
 
 		private void DrawFinalPolygonFromCameraPoints()
@@ -620,6 +643,374 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				MovablePoints.SetOverlay(overlay);
 			}
+		}
+		
+		// ===== COMPREHENSIVE SCREEN 1 DIAGNOSTIC METHODS =====
+		
+		private string GetScreen1DiagnosticPath()
+		{
+			var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+			var diagnosticDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "KinectCalibrationDiagnostics", $"Screen1_PlaneCalibration_{timestamp}");
+			System.IO.Directory.CreateDirectory(diagnosticDir);
+			return System.IO.Path.Combine(diagnosticDir, "screen1_diagnostic.txt");
+		}
+		
+		private void LogToFile(string path, string message)
+		{
+			try
+			{
+				var directory = System.IO.Path.GetDirectoryName(path);
+				if (!string.IsNullOrEmpty(directory) && !System.IO.Directory.Exists(directory))
+				{
+					System.IO.Directory.CreateDirectory(directory);
+				}
+				System.IO.File.AppendAllText(path, $"[{DateTime.Now:HH:mm:ss.fff}] {message}" + Environment.NewLine);
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"LogToFile failed: {ex.Message}");
+			}
+		}
+		
+		private void InitializeScreen1Diagnostics()
+		{
+			var diagnosticPath = GetScreen1DiagnosticPath();
+			LogToFile(diagnosticPath, "=== SCREEN 1 PLANE CALIBRATION DIAGNOSTIC ===");
+			LogToFile(diagnosticPath, $"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
+			LogToFile(diagnosticPath, $"Diagnostic Directory: {System.IO.Path.GetDirectoryName(diagnosticPath)}");
+			LogToFile(diagnosticPath, "");
+			
+			// Log system information
+			LogToFile(diagnosticPath, "=== SYSTEM INFORMATION ===");
+			LogToFile(diagnosticPath, $"OS Version: {Environment.OSVersion}");
+			LogToFile(diagnosticPath, $"Machine Name: {Environment.MachineName}");
+			LogToFile(diagnosticPath, $"User Name: {Environment.UserName}");
+			LogToFile(diagnosticPath, $"Working Directory: {Environment.CurrentDirectory}");
+			LogToFile(diagnosticPath, "");
+			
+			// Log Kinect status
+			LogToFile(diagnosticPath, "=== KINECT STATUS DIAGNOSTIC ===");
+			if (kinectManager != null)
+			{
+				LogToFile(diagnosticPath, $"Kinect Initialized: {kinectManager.IsInitialized}");
+				LogToFile(diagnosticPath, $"Color Stream Active: {kinectManager.IsColorStreamActive()}");
+				LogToFile(diagnosticPath, $"Depth Stream Active: {kinectManager.IsDepthStreamActive()}");
+				LogToFile(diagnosticPath, $"Color Resolution: {kinectManager.ColorWidth}x{kinectManager.ColorHeight}");
+				LogToFile(diagnosticPath, $"Depth Resolution: {kinectManager.DepthWidth}x{kinectManager.DepthHeight}");
+				LogToFile(diagnosticPath, $"Color Frames Received: {kinectManager.colorFramesReceived}");
+				LogToFile(diagnosticPath, $"Depth Frames Received: {kinectManager.depthFramesReceived}");
+			}
+			else
+			{
+				LogToFile(diagnosticPath, "ERROR: KinectManager is null");
+			}
+			LogToFile(diagnosticPath, "");
+			
+			// Log initial calibration state
+			LogToFile(diagnosticPath, "=== INITIAL CALIBRATION STATE ===");
+			LogToFile(diagnosticPath, $"Plane Normal: {planeNormal?.X ?? 0:F3}, {planeNormal?.Y ?? 0:F3}, {planeNormal?.Z ?? 0:F3}");
+			LogToFile(diagnosticPath, $"Plane Distance: {planeDistance:F3}");
+			LogToFile(diagnosticPath, $"Plane P1: {planeP1?.X ?? 0:F3}, {planeP1?.Y ?? 0:F3}, {planeP1?.Z ?? 0:F3}");
+			LogToFile(diagnosticPath, $"Plane P2: {planeP2?.X ?? 0:F3}, {planeP2?.Y ?? 0:F3}, {planeP2?.Z ?? 0:F3}");
+			LogToFile(diagnosticPath, $"Final Camera Corners Count: {finalCameraCorners?.Count ?? 0}");
+			LogToFile(diagnosticPath, "");
+			
+			LogToFile(diagnosticPath, "Screen 1 diagnostics initialized successfully");
+			LogToFile(diagnosticPath, "");
+		}
+		
+		private void LogPointPlacementDiagnostic(System.Windows.Point canvasPoint, int pointIndex)
+		{
+			var diagnosticPath = GetScreen1DiagnosticPath();
+			LogToFile(diagnosticPath, "=== POINT PLACEMENT DIAGNOSTIC ===");
+			LogToFile(diagnosticPath, $"Point {pointIndex + 1} placed at canvas coordinates: ({canvasPoint.X:F1}, {canvasPoint.Y:F1})");
+			
+			try
+			{
+				// Convert to color coordinates
+				var colorPoint = CanvasToColor(canvasPoint);
+				LogToFile(diagnosticPath, $"Point {pointIndex + 1} color coordinates: ({colorPoint.X:F1}, {colorPoint.Y:F1})");
+				
+				// Try to map to 3D
+				if (kinectManager != null && kinectManager.IsInitialized)
+				{
+					CameraSpacePoint cameraPoint;
+					bool mappingSuccess = kinectManager.TryMapColorPixelToCameraSpace((int)Math.Round(colorPoint.X), (int)Math.Round(colorPoint.Y), out cameraPoint);
+					
+					if (mappingSuccess)
+					{
+						LogToFile(diagnosticPath, $"Point {pointIndex + 1} 3D coordinates: ({cameraPoint.X:F3}, {cameraPoint.Y:F3}, {cameraPoint.Z:F3})");
+						LogToFile(diagnosticPath, $"Point {pointIndex + 1} distance from Kinect: {cameraPoint.Z:F3}m");
+						
+						// Check if depth is valid
+						if (float.IsNaN(cameraPoint.Z) || cameraPoint.Z <= 0)
+						{
+							LogToFile(diagnosticPath, $"WARNING: Point {pointIndex + 1} has invalid depth data");
+						}
+						else if (cameraPoint.Z < 0.5 || cameraPoint.Z > 4.0)
+						{
+							LogToFile(diagnosticPath, $"WARNING: Point {pointIndex + 1} is outside recommended range (0.5m - 4.0m)");
+						}
+					}
+					else
+					{
+						LogToFile(diagnosticPath, $"ERROR: Failed to map Point {pointIndex + 1} to 3D space");
+					}
+				}
+				else
+				{
+					LogToFile(diagnosticPath, $"ERROR: Kinect not available for Point {pointIndex + 1} mapping");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(diagnosticPath, $"ERROR in Point {pointIndex + 1} processing: {ex.Message}");
+			}
+			
+			LogToFile(diagnosticPath, "");
+		}
+		
+		private void LogPlaneCalculationDiagnostic()
+		{
+			LogPlaneCalculationDiagnostic(null, null, 0);
+		}
+		
+		private void LogPlaneCalculationDiagnostic(System.Collections.Generic.List<CameraSpacePoint> camPts, KinectCalibrationWPF.UI.MovablePointsCanvas.Vector3D? normal, double distance)
+		{
+			var diagnosticPath = GetScreen1DiagnosticPath();
+			LogToFile(diagnosticPath, "=== PLANE CALCULATION DIAGNOSTIC ===");
+			
+			try
+			{
+				var points = MovablePoints.GetPointPositions();
+				LogToFile(diagnosticPath, $"Total points placed: {points?.Count ?? 0}");
+				
+				if (points == null || points.Count < 3)
+				{
+					LogToFile(diagnosticPath, "ERROR: Not enough points for plane calculation (need at least 3)");
+					return;
+				}
+				
+				// Log all points
+				for (int i = 0; i < points.Count; i++)
+				{
+					var canvasPoint = points[i];
+					var colorPoint = CanvasToColor(canvasPoint);
+					LogToFile(diagnosticPath, $"Point {i + 1}: Canvas=({canvasPoint.X:F1},{canvasPoint.Y:F1}), Color=({colorPoint.X:F1},{colorPoint.Y:F1})");
+					
+					// Try to get 3D coordinates
+					if (kinectManager != null && kinectManager.IsInitialized)
+					{
+						CameraSpacePoint cameraPoint;
+						if (kinectManager.TryMapColorPixelToCameraSpace((int)Math.Round(colorPoint.X), (int)Math.Round(colorPoint.Y), out cameraPoint))
+						{
+							LogToFile(diagnosticPath, $"Point {i + 1} 3D: ({cameraPoint.X:F3}, {cameraPoint.Y:F3}, {cameraPoint.Z:F3})");
+						}
+						else
+						{
+							LogToFile(diagnosticPath, $"Point {i + 1} 3D: MAPPING FAILED");
+						}
+					}
+				}
+				
+				// Check if plane was calculated
+				if (normal.HasValue)
+				{
+					LogToFile(diagnosticPath, "=== PLANE CALCULATION RESULTS ===");
+					LogToFile(diagnosticPath, $"Plane Normal: ({normal.Value.X:F6}, {normal.Value.Y:F6}, {normal.Value.Z:F6})");
+					LogToFile(diagnosticPath, $"Plane Distance: {distance:F6}");
+					LogToFile(diagnosticPath, $"Plane Equation: {normal.Value.X:F6}*X + {normal.Value.Y:F6}*Y + {normal.Value.Z:F6}*Z + {distance:F6} = 0");
+					
+					// Validate plane normal
+					double normalLength = Math.Sqrt(normal.Value.X * normal.Value.X + normal.Value.Y * normal.Value.Y + normal.Value.Z * normal.Value.Z);
+					LogToFile(diagnosticPath, $"Plane Normal Length: {normalLength:F6} (should be close to 1.0)");
+					
+					if (Math.Abs(normalLength - 1.0) > 0.1)
+					{
+						LogToFile(diagnosticPath, "WARNING: Plane normal is not properly normalized");
+					}
+					
+					// Check if plane is reasonable
+					if (Math.Abs(normal.Value.X) < 0.001 && Math.Abs(normal.Value.Y) < 0.001 && Math.Abs(normal.Value.Z) < 0.001)
+					{
+						LogToFile(diagnosticPath, "ERROR: Plane normal is zero vector - calculation failed");
+					}
+					
+					// Log plane quality metrics
+					if (camPts != null && camPts.Count >= 3)
+					{
+						LogToFile(diagnosticPath, "=== PLANE QUALITY ANALYSIS ===");
+						
+						// Calculate distances from points to plane
+						for (int i = 0; i < Math.Min(camPts.Count, 3); i++)
+						{
+							var point = camPts[i];
+							double distanceToPlane = Math.Abs(normal.Value.X * point.X + normal.Value.Y * point.Y + normal.Value.Z * point.Z + distance);
+							LogToFile(diagnosticPath, $"Point {i + 1} distance to plane: {distanceToPlane:F6}m");
+						}
+						
+						// Calculate plane area (if we have 4 points)
+						if (camPts.Count == 4)
+						{
+							var p1 = camPts[0];
+							var p2 = camPts[1];
+							var p3 = camPts[2];
+							var p4 = camPts[3];
+							
+							// Calculate area using cross product
+							var v1 = new KinectCalibrationWPF.UI.MovablePointsCanvas.Vector3D(p2.X - p1.X, p2.Y - p1.Y, p2.Z - p1.Z);
+							var v2 = new KinectCalibrationWPF.UI.MovablePointsCanvas.Vector3D(p3.X - p1.X, p3.Y - p1.Y, p3.Z - p1.Z);
+							var cross = Cross(v1, v2);
+							double area = Math.Sqrt(cross.X * cross.X + cross.Y * cross.Y + cross.Z * cross.Z) / 2.0;
+							LogToFile(diagnosticPath, $"Calculated plane area: {area:F6} square meters");
+						}
+					}
+					else if (finalCameraCorners != null && finalCameraCorners.Count >= 3)
+					{
+						LogToFile(diagnosticPath, "=== PLANE QUALITY ANALYSIS ===");
+						
+						// Calculate distances from points to plane
+						for (int i = 0; i < Math.Min(finalCameraCorners.Count, 3); i++)
+						{
+							var point = finalCameraCorners[i];
+							double distanceToPlane = Math.Abs(planeNormal.Value.X * point.X + planeNormal.Value.Y * point.Y + planeNormal.Value.Z * point.Z + planeDistance);
+							LogToFile(diagnosticPath, $"Point {i + 1} distance to plane: {distanceToPlane:F6}m");
+						}
+						
+						// Calculate plane area (if we have 4 points)
+						if (finalCameraCorners.Count == 4)
+						{
+							var p1 = finalCameraCorners[0];
+							var p2 = finalCameraCorners[1];
+							var p3 = finalCameraCorners[2];
+							var p4 = finalCameraCorners[3];
+							
+							// Calculate area using cross product
+							var v1 = new KinectCalibrationWPF.UI.MovablePointsCanvas.Vector3D(p2.X - p1.X, p2.Y - p1.Y, p2.Z - p1.Z);
+							var v2 = new KinectCalibrationWPF.UI.MovablePointsCanvas.Vector3D(p3.X - p1.X, p3.Y - p1.Y, p3.Z - p1.Z);
+							var cross = Cross(v1, v2);
+							double area = Math.Sqrt(cross.X * cross.X + cross.Y * cross.Y + cross.Z * cross.Z) / 2.0;
+							LogToFile(diagnosticPath, $"Calculated plane area: {area:F6} square meters");
+						}
+					}
+				}
+				else
+				{
+					LogToFile(diagnosticPath, "ERROR: Plane normal is null - calculation failed");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(diagnosticPath, $"ERROR in plane calculation diagnostic: {ex.Message}");
+				LogToFile(diagnosticPath, $"Stack Trace: {ex.StackTrace}");
+			}
+			
+			LogToFile(diagnosticPath, "");
+		}
+		
+		private void LogCalibrationSaveDiagnostic()
+		{
+			var diagnosticPath = GetScreen1DiagnosticPath();
+			LogToFile(diagnosticPath, "=== CALIBRATION SAVE DIAGNOSTIC ===");
+			
+			try
+			{
+				LogToFile(diagnosticPath, "Attempting to save calibration data...");
+				
+				// Log what we're about to save
+				if (calibrationConfig != null)
+				{
+					LogToFile(diagnosticPath, $"CalibrationConfig is not null");
+					
+					if (calibrationConfig.Plane != null)
+					{
+						LogToFile(diagnosticPath, $"Plane to save: Nx={calibrationConfig.Plane.Nx:F6}, Ny={calibrationConfig.Plane.Ny:F6}, Nz={calibrationConfig.Plane.Nz:F6}, D={calibrationConfig.Plane.D:F6}");
+					}
+					else
+					{
+						LogToFile(diagnosticPath, "WARNING: Plane is null in CalibrationConfig");
+					}
+					
+					LogToFile(diagnosticPath, $"CornerPointsNormalized count: {calibrationConfig.CornerPointsNormalized?.Count ?? 0}");
+					LogToFile(diagnosticPath, $"CornerPointsCamera count: {calibrationConfig.CornerPointsCamera?.Count ?? 0}");
+					
+					// Try to save
+					CalibrationStorage.Save(calibrationConfig);
+					LogToFile(diagnosticPath, "Calibration saved successfully!");
+					
+					// Verify by loading back
+					var loadedConfig = CalibrationStorage.Load();
+					if (loadedConfig != null && loadedConfig.Plane != null)
+					{
+						LogToFile(diagnosticPath, $"Verification - Loaded plane: Nx={loadedConfig.Plane.Nx:F6}, Ny={loadedConfig.Plane.Ny:F6}, Nz={loadedConfig.Plane.Nz:F6}, D={loadedConfig.Plane.D:F6}");
+					}
+					else
+					{
+						LogToFile(diagnosticPath, "ERROR: Could not verify saved calibration");
+					}
+				}
+				else
+				{
+					LogToFile(diagnosticPath, "ERROR: CalibrationConfig is null");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(diagnosticPath, $"ERROR saving calibration: {ex.Message}");
+				LogToFile(diagnosticPath, $"Stack Trace: {ex.StackTrace}");
+			}
+			
+			LogToFile(diagnosticPath, "");
+		}
+		
+		private void LogDepthDataDiagnostic()
+		{
+			var diagnosticPath = GetScreen1DiagnosticPath();
+			LogToFile(diagnosticPath, "=== DEPTH DATA DIAGNOSTIC ===");
+			
+			try
+			{
+				if (kinectManager != null && kinectManager.IsInitialized)
+				{
+					ushort[] depthData;
+					int width, height;
+					if (kinectManager.TryGetDepthFrameRaw(out depthData, out width, out height))
+					{
+						LogToFile(diagnosticPath, $"Depth data available: {width}x{height}, {depthData.Length} pixels");
+						
+						// Analyze depth data
+						var validDepths = depthData.Where(d => d > 0).ToArray();
+						if (validDepths.Length > 0)
+						{
+							var minDepth = validDepths.Min() / 1000.0; // Convert to meters
+							var maxDepth = validDepths.Max() / 1000.0;
+							var avgDepth = validDepths.Average(d => d / 1000.0);
+							
+							LogToFile(diagnosticPath, $"Depth range: {minDepth:F3}m - {maxDepth:F3}m");
+							LogToFile(diagnosticPath, $"Average depth: {avgDepth:F3}m");
+							LogToFile(diagnosticPath, $"Valid depth pixels: {validDepths.Length}/{depthData.Length} ({100.0 * validDepths.Length / depthData.Length:F1}%)");
+						}
+						else
+						{
+							LogToFile(diagnosticPath, "WARNING: No valid depth data found");
+						}
+					}
+					else
+					{
+						LogToFile(diagnosticPath, "ERROR: Could not get depth frame data");
+					}
+				}
+				else
+				{
+					LogToFile(diagnosticPath, "ERROR: Kinect not available for depth analysis");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(diagnosticPath, $"ERROR in depth data diagnostic: {ex.Message}");
+			}
+			
+			LogToFile(diagnosticPath, "");
 		}
 	}
 }

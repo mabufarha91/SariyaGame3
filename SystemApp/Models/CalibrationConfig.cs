@@ -69,6 +69,10 @@ namespace KinectCalibrationWPF.Models
 		public double AverageMarkerSizePixels { get; set; } // Average size of detected markers in pixels
 		[DataMember]
 		public double CalibrationAccuracyScore { get; set; } // Quality score of calibration (0-1)
+		
+		// Screen 3 Touch Detection Settings
+		[DataMember]
+		public Dictionary<string, object> TouchDetectionSettings { get; set; } // Additional touch detection parameters
 
 		public CalibrationConfig()
 		{
@@ -88,7 +92,7 @@ namespace KinectCalibrationWPF.Models
 			TouchArea = new TouchAreaDefinition();
 			ArUcoMarkerCenters = new List<Point>();
 			ArUcoMarkerIds = new List<int>();
-			TouchAreaCalculatedUtc = DateTime.MinValue;
+			TouchAreaCalculatedUtc = DateTime.UtcNow;
 			ProjectorMarkerCenters = new List<Point>();
 			CameraMarkerCornersTL = new List<Point>();
 			PerspectiveTransform3x3 = new double[9]
@@ -106,6 +110,7 @@ namespace KinectCalibrationWPF.Models
 			TouchAreaCorners3D = new List<SerializableCameraSpacePoint>();
 			AverageMarkerSizePixels = 0.0;
 			CalibrationAccuracyScore = 0.0;
+			TouchDetectionSettings = new Dictionary<string, object>();
 		}
 
 		private static double[] CreateIdentity4x4As1D()

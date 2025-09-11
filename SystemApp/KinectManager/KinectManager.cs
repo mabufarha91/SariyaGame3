@@ -31,6 +31,7 @@ namespace KinectCalibrationWPF.KinectManager
         private DateTime lastDepthFrameTimeUtc;
         private DateTime lastInfraredFrameTimeUtc;
         private ColorSpacePoint[] depthToColorPoints;
+        private CameraSpacePoint[] latestCameraSpacePoints;
         private Body[] latestBodies;
         private readonly object bodyDataLock = new object();
         private double infraredExposureGain = 1.0;
@@ -205,6 +206,12 @@ namespace KinectCalibrationWPF.KinectManager
                             depthToColorPoints = new ColorSpacePoint[frameDesc.LengthInPixels];
                         }
                         coordinateMapper.MapDepthFrameToColorSpace(latestDepthData, depthToColorPoints);
+                        // Also map to camera space for signed plane distance calculations
+                        if (latestCameraSpacePoints == null || latestCameraSpacePoints.Length != frameDesc.LengthInPixels)
+                        {
+                            latestCameraSpacePoints = new CameraSpacePoint[frameDesc.LengthInPixels];
+                        }
+                        coordinateMapper.MapDepthFrameToCameraSpace(latestDepthData, latestCameraSpacePoints);
                     }
                     catch (Exception mapEx)
                     {
@@ -355,6 +362,25 @@ namespace KinectCalibrationWPF.KinectManager
                 return true;
             }
         }
+        
+        public bool TryGetDepthFrameRaw(out ushort[] depthData, out int width, out int height)
+        {
+            depthData = null;
+            width = depthWidth;
+            height = depthHeight;
+            if (!IsInitialized || kinectSensor == null || depthWidth <= 0 || depthHeight <= 0)
+                return false;
+            lock (depthDataLock)
+            {
+                if (latestDepthData == null || latestDepthData.Length == 0)
+                {
+                    return false;
+                }
+                depthData = new ushort[latestDepthData.Length];
+                Array.Copy(latestDepthData, depthData, latestDepthData.Length);
+                return true;
+            }
+        }
 
         public bool IsColorStreamActive()
         {
@@ -374,6 +400,18 @@ namespace KinectCalibrationWPF.KinectManager
                 if (latestBodies == null) return null;
                 var clone = new Body[latestBodies.Length];
                 Array.Copy(latestBodies, clone, latestBodies.Length);
+                return clone;
+            }
+        }
+        
+        public ushort[] GetLatestDepthDataSnapshot()
+        {
+            if (!IsInitialized) return null;
+            lock (depthDataLock)
+            {
+                if (latestDepthData == null) return null;
+                var clone = new ushort[latestDepthData.Length];
+                Array.Copy(latestDepthData, clone, latestDepthData.Length);
                 return clone;
             }
         }
@@ -402,6 +440,17 @@ namespace KinectCalibrationWPF.KinectManager
             // plane normalized? assume n is unit
             double value = nx * p.X + ny * p.Y + nz * p.Z + d;
             return Math.Abs(value); // meters when n is unit length
+        }
+
+        // Returns signed, normalized distance from point to plane. Positive values indicate the point is on the
+        // side the normal points toward (expected to be toward the camera after orientation). Units: meters.
+        public static double DistancePointToPlaneSignedNormalized(CameraSpacePoint p, double nx, double ny, double nz, double d)
+        {
+            double norm = System.Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            if (norm < 1e-9) return double.NaN;
+            double inv = 1.0 / norm;
+            double value = (nx * p.X + ny * p.Y + nz * p.Z + d) * inv;
+            return value;
         }
         
         public BitmapSource GetDepthBitmap()
@@ -455,6 +504,91 @@ namespace KinectCalibrationWPF.KinectManager
                     0);
                     
                 return bitmap;
+            }
+        }
+
+        // Produces a normalized depth visualization centered around a given distance with a window (meters).
+        // Example: center=wall distance, window=0.6 => near=center-0.3, far=center+0.3, mapped to 255..0.
+        public BitmapSource GetDepthBitmapNormalized(double centerMeters, double windowMeters = 0.6, bool colorRamp = false)
+        {
+            if (!IsInitialized || kinectSensor == null)
+                return CreateTestDepthBitmap();
+
+            using (var depthFrame = depthFrameReader.AcquireLatestFrame())
+            {
+                if (depthFrame == null)
+                    return CreateTestDepthBitmap();
+
+                var desc = depthFrame.DepthFrameSource.FrameDescription;
+                var depthFrameData = new ushort[desc.LengthInPixels];
+                depthFrame.CopyFrameDataToArray(depthFrameData);
+
+                lock (depthDataLock)
+                {
+                    if (latestDepthData == null || latestDepthData.Length != depthFrameData.Length)
+                    {
+                        latestDepthData = new ushort[depthFrameData.Length];
+                    }
+                    System.Array.Copy(depthFrameData, latestDepthData, depthFrameData.Length);
+                    depthWidth = desc.Width;
+                    depthHeight = desc.Height;
+                }
+
+                double half = System.Math.Max(0.05, windowMeters * 0.5);
+                double near = System.Math.Max(0.2, centerMeters - half);
+                double far = System.Math.Max(near + 0.01, centerMeters + half);
+                double range = far - near;
+
+                var pixels = new byte[desc.LengthInPixels * 4];
+                for (int i = 0; i < depthFrameData.Length; i++)
+                {
+                    double dm = depthFrameData[i] * 0.001;
+                    double t = (far - dm) / range; // nearer -> higher intensity
+                    if (double.IsNaN(t)) t = 0;
+                    if (t < 0) t = 0; if (t > 1) t = 1;
+                    byte r, g, b;
+                    if (!colorRamp)
+                    {
+                        byte intensity = (byte)(t * 255.0);
+                        r = g = b = intensity;
+                    }
+                    else
+                    {
+                        // Simple blue->cyan->green->yellow->red ramp
+                        double v = t;
+                        r = (byte)(System.Math.Min(1.0, System.Math.Max(0.0, 1.5 * v - 0.5)) * 255);
+                        g = (byte)(System.Math.Min(1.0, System.Math.Max(0.0, 1.5 * v)) * 255);
+                        b = (byte)(System.Math.Min(1.0, System.Math.Max(0.0, 1.0 - 1.5 * v)) * 255);
+                    }
+                    int idx = i * 4;
+                    pixels[idx] = b;
+                    pixels[idx + 1] = g;
+                    pixels[idx + 2] = r;
+                    pixels[idx + 3] = 255;
+                }
+
+                var bitmap = new WriteableBitmap(desc.Width, desc.Height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null);
+                bitmap.WritePixels(new System.Windows.Int32Rect(0, 0, desc.Width, desc.Height), pixels, desc.Width * 4, 0);
+                return bitmap;
+            }
+        }
+
+        public bool TryGetCameraSpaceFrame(out CameraSpacePoint[] cameraPoints, out int width, out int height)
+        {
+            cameraPoints = null;
+            width = depthWidth;
+            height = depthHeight;
+            if (!IsInitialized || kinectSensor == null || depthWidth <= 0 || depthHeight <= 0)
+                return false;
+            lock (depthDataLock)
+            {
+                if (latestCameraSpacePoints == null || latestCameraSpacePoints.Length == 0)
+                {
+                    return false;
+                }
+                cameraPoints = new CameraSpacePoint[latestCameraSpacePoints.Length];
+                System.Array.Copy(latestCameraSpacePoints, cameraPoints, latestCameraSpacePoints.Length);
+                return true;
             }
         }
 
