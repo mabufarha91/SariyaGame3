@@ -58,11 +58,28 @@ We migrated from Unity to WPF for several strategic reasons:
 - Visual overlays: red centers + lime outlines for detected quads
 - Diagnostics saved for troubleshooting (color/gray/HSV-mask snapshots)
 
+### **✅ Implemented (Screen 3 - Touch Detection Test)**
+- **Real-time Depth Camera Feed**: Live Kinect depth stream with proper visualization
+- **Wall Plane Calibration**: Uses calibrated plane from Screen 1 for accurate touch detection
+- **Touch Detection Algorithm**: Signed plane distance calculation with configurable sensitivity
+- **Multi-touch Support**: Blob clustering to detect multiple simultaneous touches
+- **ROI (Region of Interest)**: Touch detection limited to calibrated TouchArea from Screen 2
+- **Visual Feedback**: Real-time touch visualization with overlays on depth feed
+- **Simplified UI**: Clean, intuitive interface with advanced settings in collapsible section
+- **Diagnostic System**: Comprehensive logging and diagnostic file generation
+- **Camera View Controls**: Zoom, pan, and vertical flip options for optimal viewing
+- **Touch Settings**: Configurable sensitivity, minimum touch size, and smoothing parameters
+
+### **🔄 In Progress (Screen 3)**
+- **Camera Feed Positioning**: Currently working on proper centering and scaling of depth camera view
+- **False Positive Reduction**: Fine-tuning touch detection parameters to eliminate noise
+- **UI Optimization**: Continuous improvements to make the interface more user-friendly
+
 ### **🔄 Planned Features**
-- **Screen 4**: Touch Detection Test & Tuning
+- **Screen 4**: Advanced Touch Detection Tuning & Validation
 - **3D Coordinate Mapping**: Convert 2D screen points to 3D world coordinates
 - **Calibration Data Persistence**: Save/load calibration settings
-- **Advanced Touch Detection**: Real-time depth-based touch detection
+- **Advanced Touch Detection**: Enhanced algorithms for better accuracy
 
 ## 🛠 **Technical Architecture**
 
@@ -97,6 +114,21 @@ We migrated from Unity to WPF for several strategic reasons:
   - Runs multi-pass ArUco detection
   - Draws overlays and updates status/logs
 - `ProjectorWindow`: displays 4 markers (IDs 0–3), scaled by `QrSizeSlider`
+
+#### **Screen 3: Touch Detection Test** (`CalibrationWizard/Screen3_TouchTest.xaml[.cs]`)
+- **Depth Camera Visualization**: Real-time depth feed with proper scaling and centering
+- **Touch Detection Engine**: 
+  - Uses signed plane distance calculation for accurate touch detection
+  - Implements ROI (Region of Interest) based on Screen 2's TouchArea
+  - Blob clustering algorithm for multi-touch support
+  - Configurable sensitivity and minimum touch size parameters
+- **UI Controls**:
+  - Sensitivity slider (0.01m - 0.15m range)
+  - Touch visualization toggle
+  - Camera zoom, pan, and flip controls
+  - Advanced settings in collapsible section
+- **Diagnostic System**: Comprehensive logging to `%USERPROFILE%/Pictures/KinectCalibrationDiagnostics/`
+- **Real-time Status**: Touch count, depth information, and detection status
 
 #### **4. CalibrationPoint Model** (`Models/CalibrationPoint.cs`)
 - Data model for calibration points
@@ -152,13 +184,33 @@ The application includes a test mode that works without Kinect hardware:
 3. Start the Calibration Wizard → Screen 2
 4. Use `QrSizeSlider` to make markers large and clearly visible
 5. Adjust HSV sliders to visualize the mask (detection uses grayscale)
-6. Click “Find Markers”; watch Status text for the detection passes
+6. Click "Find Markers"; watch Status text for the detection passes
 7. If found, red dots appear at centers; lime outlines draw the quads
 
 Notes:
 - If Status shows a WARNING about placeholders, your projector is not using real ArUco PNGs
 - Marker dictionary: `DICT_7X7_250` (IDs 0,1,2,3)
 - Increase marker size and reduce motion blur for best results
+
+### **Using Screen 3 (Touch Detection Test)**
+
+1. **Prerequisites**: Complete Screen 1 (wall plane calibration) and Screen 2 (TouchArea definition)
+2. **Launch Screen 3**: The depth camera feed should display in the left panel
+3. **Adjust Sensitivity**: Use the sensitivity slider (default: 0.01m) to fine-tune touch detection
+4. **Enable Touch Visualization**: Click "SHOW TOUCH DETECTION" to see detected touch pixels
+5. **Test Touch Detection**: Touch the wall within the calibrated TouchArea
+6. **Monitor Status**: Watch the status panel for touch count and depth information
+7. **Advanced Settings**: Expand "Advanced Settings" for:
+   - Camera zoom and flip controls
+   - Minimum touch size adjustment
+   - Diagnostic file generation
+
+**Current Status**: Screen 3 is in active development. The depth camera feed positioning and false positive reduction are being optimized for better user experience.
+
+**Troubleshooting**:
+- If camera feed appears as a tiny strip: This is a known issue being actively worked on
+- If false touches are detected: Adjust sensitivity slider to a lower value (e.g., 0.01m)
+- For detailed diagnostics: Click "Generate Diagnostics" in Advanced Settings
 
 ### **Diagnostics and Logs**
 
@@ -190,6 +242,39 @@ Notes:
 - **Release**: Complete point placement/movement
 
 ## 🔧 **Development Notes**
+
+### **Screen 3 Development Journey**
+
+Screen 3 has undergone extensive development and optimization. Here's a comprehensive overview of the work completed:
+
+#### **Initial Implementation**
+- **Touch Detection Algorithm**: Implemented signed plane distance calculation for accurate touch detection
+- **ROI Integration**: Touch detection limited to the calibrated TouchArea from Screen 2
+- **Multi-touch Support**: Blob clustering algorithm to detect multiple simultaneous touches
+- **Real-time Visualization**: Live depth camera feed with touch overlay visualization
+
+#### **UI Simplification Process**
+- **Initial Complex UI**: Started with numerous sliders and controls that were confusing
+- **Simplified Interface**: Reduced to essential controls with advanced settings in collapsible section
+- **Removed Unnecessary Features**: Eliminated "Show Detection Area on Wall" button and other unused controls
+- **Clean Layout**: Organized controls into logical groups (Touch Detection, Status, Advanced Settings)
+
+#### **Technical Improvements**
+- **Plane Normalization**: Added proper plane normal vector normalization and orientation
+- **Signed Distance Calculation**: Implemented `DistancePointToPlaneSignedNormalized` for accurate touch detection
+- **Camera Space Mapping**: Enhanced coordinate mapping between depth space and camera space
+- **Performance Optimization**: Added pixel sampling and safety limits to prevent system freezing
+
+#### **Current Challenges Being Addressed**
+- **Camera Feed Positioning**: Working on proper centering and scaling of depth camera view using Viewbox
+- **False Positive Reduction**: Fine-tuning sensitivity parameters (currently at 0.01m threshold)
+- **Touch Size Filtering**: Increased minimum blob area to 50 points to reduce noise
+- **UI Responsiveness**: Ensuring smooth real-time performance during touch detection
+
+#### **Diagnostic System**
+- **Comprehensive Logging**: Detailed diagnostic files saved to `%USERPROFILE%/Pictures/KinectCalibrationDiagnostics/`
+- **Real-time Monitoring**: Status updates showing touch count, depth information, and detection state
+- **Troubleshooting Support**: Diagnostic button generates detailed system information for debugging
 
 ### **The Three-Question Logic Implementation**
 
@@ -249,6 +334,8 @@ KinectCalibrationWPF/
 │   ├── CalibrationWizardWindow.xaml.cs     # Screen 1 logic
 │   ├── Screen2_MarkerAlignment.xaml        # Screen 2 UI
 │   ├── Screen2_MarkerAlignment.xaml.cs     # Screen 2 logic (camera feeds + ArUco detection)
+│   ├── Screen3_TouchTest.xaml              # Screen 3 UI (touch detection test)
+│   ├── Screen3_TouchTest.xaml.cs           # Screen 3 logic (depth feed + touch detection)
 │   ├── ProjectorWindow.xaml                # Secondary display for markers
 │   └── ProjectorWindow.xaml.cs             # Marker placement/scaling API
 ├── KinectManager/
@@ -262,18 +349,24 @@ KinectCalibrationWPF/
 
 ## 🎯 **Next Steps**
 
-### **Immediate Development**
-1. **Test Screen 1 functionality** with and without Kinect
-2. **Implement Screen 2** (4 corner points for interactive area)
-3. **Add 3D coordinate mapping** using Kinect's CoordinateMapper
-4. **Implement calibration data persistence**
+### **Immediate Development (Screen 3)**
+1. **Fix depth camera feed positioning** - Currently working on proper centering and scaling
+2. **Optimize touch detection parameters** - Reduce false positives and improve accuracy
+3. **UI/UX improvements** - Make the interface more intuitive and user-friendly
+4. **Performance optimization** - Ensure smooth real-time touch detection
+
+### **Completed Development**
+1. **Screen 1**: ✅ Wall plane calibration with movable points
+2. **Screen 2**: ✅ ArUco marker detection and TouchArea definition
+3. **Screen 3**: 🔄 Touch detection test (in progress - core functionality implemented)
 
 ### **Future Enhancements**
-1. **Screen 3**: Marker detection and sensor alignment
-2. **Screen 4**: Touch detection testing and tuning
-3. **Advanced touch detection algorithms**
-4. **Multi-screen support**
-5. **Calibration validation and quality metrics**
+1. **Screen 4**: Advanced touch detection tuning and validation
+2. **3D coordinate mapping** using Kinect's CoordinateMapper
+3. **Calibration data persistence** and save/load functionality
+4. **Advanced touch detection algorithms** with machine learning
+5. **Multi-screen support** and calibration validation
+6. **Real-time performance metrics** and quality assessment
 
 ## 🤝 **Contributing**
 
@@ -290,7 +383,7 @@ For questions or issues with the WPF implementation, please refer to the project
 
 ---
 
-**Build Date**: 2025-08-20  
+**Build Date**: 2025-09-11  
 **Framework**: WPF (.NET Framework 4.8)  
-**Status**: Screen 1, Screen 2/3 Alignment (robust ArUco) ✅  
-**Next**: Screen 4 Touch Test 🔄
+**Status**: Screen 1 ✅, Screen 2 ✅, Screen 3 🔄 (Touch Detection - In Progress)  
+**Next**: Complete Screen 3 camera positioning and touch detection optimization
