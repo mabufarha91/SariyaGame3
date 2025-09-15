@@ -86,6 +86,7 @@
 							<TextBlock x:Name="ThresholdValueText" Text="0.010 m" HorizontalAlignment="Center" FontSize="14" FontWeight="Bold" Foreground="#2196F3" Margin="0,5,0,15"/>
 							
 							<Button x:Name="ShowTouchDetectionButton" Content="👁️ SHOW TOUCH DETECTION" Style="{StaticResource WizardButtonStyle}" Margin="0,5,0,0" Background="#FF5722" Click="ShowTouchDetectionButton_Click"/>
+							<Button x:Name="CaptureBackgroundButton" Content="📸 CAPTURE BACKGROUND" Style="{StaticResource WizardButtonStyle}" Margin="0,5,0,0" Background="#4CAF50" Click="CaptureBackgroundButton_Click"/>
 						</StackPanel>
 					</GroupBox>
 					

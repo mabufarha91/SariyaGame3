@@ -26,6 +26,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private bool showTouchDetection = false;
 		private List<Point> detectedTouchPixels = new List<Point>();
 		
+		// BACKGROUND SUBTRACTION for robust touch detection
+		private ushort[] backgroundDepthFrame = null;
+		private bool backgroundCaptured = false;
+		private DateTime lastBackgroundCapture = DateTime.MinValue;
+		
 		// DEPTH CAMERA VIEW CONTROLS (like in video reference)
 		private double depthCameraXOffset = 0.0; // Move depth camera view left/right
 		private double depthCameraYOffset = 0.0; // Move depth camera view up/down
@@ -62,7 +67,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Step 1: Initialize XAML components first
 				InitializeComponent();
 				
-				// Step 1.5: Fix depth camera display positioning
+				// Step 1.5: Subscribe to Loaded event to ensure UI is ready
+				this.Loaded += Screen3_TouchTest_Loaded;
+				
+				// Step 1.6: Fix depth camera display positioning
 				FixDepthCameraDisplay();
 				
 				// Step 2: Set basic properties
@@ -109,8 +117,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Step 4: Validate calibration data
 				ValidateCalibrationData();
 				
-				// Step 5: Initialize UI elements safely
-				InitializeUIElements();
+				// Step 5: Initialize UI elements safely (moved to Loaded event)
+				// InitializeUIElements(); // Moved to Loaded event
 				
 				// Step 6: Start the update timer
 				InitializeUpdateTimer();
@@ -137,6 +145,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				MessageBox.Show(errorMsg, "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
 				throw;
+			}
+		}
+		
+		private void Screen3_TouchTest_Loaded(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				// Initialize UI elements after the window is fully loaded
+				InitializeUIElements();
+				LogToFile(GetDiagnosticPath(), "UI elements initialized after Loaded event");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in Screen3_TouchTest_Loaded: {ex.Message}");
 			}
 		}
 		
@@ -412,17 +434,24 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
 			try
-		{
-			var threshold = PlaneThresholdSlider.Value;
+			{
+				var threshold = PlaneThresholdSlider.Value;
 				
 				// DEBUG: Log the actual slider value
 				LogToFile(GetDiagnosticPath(), $"DEBUG: Slider value = {threshold:F3}m, Slider object = {(PlaneThresholdSlider != null ? "OK" : "NULL")}");
+				
+				// BACKGROUND SUBTRACTION: Capture background if not done yet
+				if (!backgroundCaptured || (DateTime.Now - lastBackgroundCapture).TotalSeconds > 30)
+				{
+					CaptureBackgroundFrame(depthData, width, height);
+					return; // Skip detection on first frame
+				}
 			
-			// Clear detected pixels if visualization is enabled
-			if (showTouchDetection)
-			{
-				detectedTouchPixels.Clear();
-			}
+				// Clear detected pixels if visualization is enabled
+				if (showTouchDetection)
+				{
+					detectedTouchPixels.Clear();
+				}
 			
 				// CRITICAL: Get calibrated wall distance
 				double wallDistance = 0;
@@ -467,21 +496,31 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					roiBottom = Math.Min(height - 1, roiBottom + 10);
 				}
 				
-				// Detect touch pixels
+				// IMPROVED TOUCH DETECTION with coordinate mapping and background subtraction
 				var touchPixels = new List<Point>();
-				int sampleStep = 6; // Sample every 6th pixel to reduce noise
-				int maxPixelsToDetect = 200; // Much lower safety limit
+				int sampleStep = 4; // Sample every 4th pixel for better accuracy
+				int maxPixelsToDetect = 100; // Lower safety limit for better performance
 				
 				for (int y = roiTop; y <= roiBottom && touchPixels.Count < maxPixelsToDetect; y += sampleStep)
 				{
 					for (int x = roiLeft; x <= roiRight && touchPixels.Count < maxPixelsToDetect; x += sampleStep)
 					{
 						int idx = y * width + x;
-						if (idx >= 0 && idx < depthData.Length)
+						if (idx >= 0 && idx < depthData.Length && idx < backgroundDepthFrame.Length)
 						{
-							double depth = depthData[idx] / 1000.0;
+							ushort currentDepth = depthData[idx];
+							ushort backgroundDepth = backgroundDepthFrame[idx];
 							
-							// Check if within touch range
+							// STEP 1: Check if point is in TouchArea using proper coordinate mapping
+							if (!IsDepthPointInTouchArea(x, y, currentDepth))
+								continue;
+							
+							// STEP 2: Check for significant depth difference (background subtraction)
+							if (!IsSignificantDepthDifference(currentDepth, backgroundDepth, threshold))
+								continue;
+							
+							// STEP 3: Additional depth range check
+							double depth = currentDepth / 1000.0;
 							if (depth > 0 && depth >= touchRangeMin && depth <= touchRangeMax)
 							{
 								touchPixels.Add(new Point(x, y));
@@ -533,6 +572,49 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			catch (Exception ex)
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in DetectTouchesInDepthData: {ex.Message}");
+			}
+		}
+
+		// BACKGROUND SUBTRACTION METHODS
+		private void CaptureBackgroundFrame(ushort[] depthData, int width, int height)
+		{
+			try
+			{
+				if (backgroundDepthFrame == null || backgroundDepthFrame.Length != depthData.Length)
+				{
+					backgroundDepthFrame = new ushort[depthData.Length];
+				}
+				
+				Array.Copy(depthData, backgroundDepthFrame, depthData.Length);
+				backgroundCaptured = true;
+				lastBackgroundCapture = DateTime.Now;
+				
+				LogToFile(GetDiagnosticPath(), $"Background frame captured: {width}x{height}, {depthData.Length} pixels");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in CaptureBackgroundFrame: {ex.Message}");
+			}
+		}
+		
+		private bool IsSignificantDepthDifference(ushort currentDepth, ushort backgroundDepth, double thresholdMeters = 0.02)
+		{
+			try
+			{
+				if (currentDepth == 0 || backgroundDepth == 0)
+					return false;
+				
+				double currentMeters = currentDepth / 1000.0;
+				double backgroundMeters = backgroundDepth / 1000.0;
+				double difference = Math.Abs(currentMeters - backgroundMeters);
+				
+				// Significant difference if current depth is closer than background by threshold
+				return difference >= thresholdMeters && currentMeters < backgroundMeters;
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in IsSignificantDepthDifference: {ex.Message}");
+				return false;
 			}
 		}
 
@@ -1214,6 +1296,44 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
+		// CRITICAL: Proper coordinate mapping using Kinect SDK
+		private bool IsDepthPointInTouchArea(int depthX, int depthY, ushort depthValue)
+		{
+			try
+			{
+				if (calibration?.TouchArea == null || kinectManager?.CoordinateMapper == null)
+					return false;
+				
+				// Convert depth point to color space using Kinect's coordinate mapper
+				var depthSpacePoint = new DepthSpacePoint { X = depthX, Y = depthY };
+				var colorSpacePoint = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(depthSpacePoint, depthValue);
+				
+				// Check if mapping was successful
+				if (float.IsInfinity(colorSpacePoint.X) || float.IsInfinity(colorSpacePoint.Y) ||
+					float.IsNaN(colorSpacePoint.X) || float.IsNaN(colorSpacePoint.Y))
+					return false;
+				
+				// Check if the color point is within the TouchArea
+				bool inTouchArea = (colorSpacePoint.X >= calibration.TouchArea.X && 
+								   colorSpacePoint.X <= calibration.TouchArea.Right &&
+								   colorSpacePoint.Y >= calibration.TouchArea.Y && 
+								   colorSpacePoint.Y <= calibration.TouchArea.Bottom);
+				
+				// Log occasionally for debugging
+				if (DateTime.Now.Millisecond % 500 == 0 && depthValue > 0)
+				{
+					LogToFile(GetDiagnosticPath(), $"COORDINATE CHECK: depth({depthX},{depthY}) -> color({colorSpacePoint.X:F1},{colorSpacePoint.Y:F1}) in TouchArea={inTouchArea}");
+				}
+				
+				return inTouchArea;
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in IsDepthPointInTouchArea: {ex.Message}");
+				return false;
+			}
+		}
+
 		// Add this method to handle depth-to-color coordinate conversion
 		private Point DepthToColorCoordinates(Point depthPoint)
 		{
@@ -1401,6 +1521,23 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			catch (Exception ex)
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in ShowTouchDetectionButton_Click: {ex.Message}");
+			}
+		}
+		
+		private void CaptureBackgroundButton_Click(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				// Force background capture
+				backgroundCaptured = false;
+				LogToFile(GetDiagnosticPath(), "Background capture requested by user");
+				
+				MessageBox.Show("Background captured! Now touch the wall to test detection.", 
+					"Background Captured", MessageBoxButton.OK, MessageBoxImage.Information);
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in CaptureBackgroundButton_Click: {ex.Message}");
 			}
 		}
 		
