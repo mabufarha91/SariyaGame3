@@ -679,7 +679,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				depthCameraYOffset = 0;
 				depthCameraZoom = 1.0;
 				UpdateUnifiedViewTransform();
-				LogToFile(GetDiagnosticPath(), "View reset to default");
+				
+				// Force recreation of touch area mask
+				touchAreaMask = null;
+				LogToFile(GetDiagnosticPath(), "View reset to default and touch area mask invalidated");
 			}
 			catch (Exception ex)
 			{
@@ -988,11 +991,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// We will draw the individual pixels of the mask to get a perfect representation
 				if (touchAreaMask != null)
 				{
-					// Limit the number of pixels we draw for performance
 					int pixelsDrawn = 0;
-					int maxPixelsToDraw = 1000; // Limit to prevent UI lag
 					
-					for (int i = 0; i < touchAreaMask.Length && pixelsDrawn < maxPixelsToDraw; i++)
+					for (int i = 0; i < touchAreaMask.Length; i++)
 					{
 						if (touchAreaMask[i])
 						{
@@ -1074,7 +1075,25 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(GetDiagnosticPath(), $"ERROR in UpdateStatusInformation: {ex.Message}");
 			}
 		}
-		private void LogTouchDetectionDiagnostic() { }
+		private void LogTouchDetectionDiagnostic() 
+		{
+			try
+			{
+				if (touchAreaMask != null)
+				{
+					int maskPixels = touchAreaMask.Count(m => m);
+					int totalPixels = touchAreaMask.Length;
+					double efficiency = (double)maskPixels / totalPixels * 100;
+					
+					LogToFile(GetDiagnosticPath(), $"PERFORMANCE: Processing {maskPixels}/{totalPixels} pixels ({efficiency:F1}% efficiency)");
+					LogToFile(GetDiagnosticPath(), $"TOUCH DETECTION: {activeTouches?.Count ?? 0} active touches detected");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in LogTouchDetectionDiagnostic: {ex.Message}");
+			}
+		}
 		private string GetDiagnosticPath() 
 		{ 
 			var appDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
@@ -1177,8 +1196,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				touchAreaMask = new bool[depthData.Length];
 				var touchArea = calibration.TouchArea;
+				int maskPixels = 0;
 
-				for (int i = 0; i < depthData.Length; i++)
+				// Use a more efficient approach - sample every few pixels to reduce computation
+				const int sampleStep = 2; // Check every 2nd pixel for mask creation
+				
+				for (int i = 0; i < depthData.Length; i += sampleStep)
 				{
 					ushort depth = depthData[i];
 					if (depth > 0)
@@ -1194,12 +1217,30 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							if (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
 								colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom)
 							{
-								touchAreaMask[i] = true;
+								// Mark this pixel and nearby pixels as part of the mask
+								for (int dx = -1; dx <= 1; dx++)
+								{
+									for (int dy = -1; dy <= 1; dy++)
+									{
+										int nx = x + dx;
+										int ny = y + dy;
+										if (nx >= 0 && nx < width && ny >= 0 && ny < height)
+										{
+											int ni = ny * width + nx;
+											if (ni < touchAreaMask.Length && !touchAreaMask[ni])
+											{
+												touchAreaMask[ni] = true;
+												maskPixels++;
+											}
+										}
+									}
+								}
 							}
 						}
 					}
 				}
-				LogToFile(GetDiagnosticPath(), "Touch area mask created successfully.");
+				
+				LogToFile(GetDiagnosticPath(), $"Touch area mask created successfully with {maskPixels} pixels.");
 			}
 			catch (Exception ex)
 			{
