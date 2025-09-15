@@ -35,6 +35,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		// WALL PROFILE for improved touch detection
 		private ushort[] wallProfile = null;
 		
+		// TOUCH AREA MASK for performance optimization
+		private bool[] touchAreaMask = null;
+		
 		// DEPTH CAMERA VIEW CONTROLS (like in video reference)
 		private double depthCameraXOffset = 0.0; // Move depth camera view left/right
 		private double depthCameraYOffset = 0.0; // Move depth camera view up/down
@@ -480,7 +483,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		// CALIBRATED PLANE TOUCH DETECTION METHOD (using Screen 1 & 2 data)
+		// OPTIMIZED CALIBRATED PLANE TOUCH DETECTION METHOD (using Screen 1 & 2 data)
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
 			try
@@ -504,31 +507,31 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					return; // No data, nothing to do
 				}
 
-				// Loop through every point in the depth frame
+				// This is the key optimization:
+				// We create a "mask" of the touchable pixels once, so we don't have to do it on every frame.
+				if (touchAreaMask == null)
+				{
+					CreateTouchAreaMask(depthData, width, height);
+				}
+
+				// Now, we only check the pixels that are inside the touch area
 				for (int i = 0; i < cameraSpacePoints.Length; i++)
 				{
-					CameraSpacePoint csp = cameraSpacePoints[i];
-
-					// Check for invalid points
-					if (float.IsInfinity(csp.X) || float.IsInfinity(csp.Y) || float.IsInfinity(csp.Z))
+					if (touchAreaMask[i])
 					{
-						continue;
-					}
+						CameraSpacePoint csp = cameraSpacePoints[i];
 
-					// Calculate the signed distance from the point to the calibrated plane.
-					// A positive distance means the point is in front of the wall (towards the Kinect).
-					double distanceToWall = (planeNx * csp.X + planeNy * csp.Y + planeNz * csp.Z + planeD);
-
-					// Check if the point is within the "touch" threshold in front of the wall
-					if (distanceToWall > 0 && distanceToWall < threshold)
-					{
-						int x = i % width;
-						int y = i / width;
-						ushort depth = depthData[i];
-
-						// CRUCIAL: Now, check if this point is within the calibrated TouchArea
-						if (IsPointInTouchArea(x, y, depth))
+						if (float.IsInfinity(csp.X) || float.IsInfinity(csp.Y) || float.IsInfinity(csp.Z))
 						{
+							continue;
+						}
+
+						double distanceToWall = (planeNx * csp.X + planeNy * csp.Y + planeNz * csp.Z + planeD);
+
+						if (distanceToWall > 0 && distanceToWall < threshold)
+						{
+							int x = i % width;
+							int y = i / width;
 							touchPixels.Add(new Point(x, y));
 						}
 					}
@@ -556,7 +559,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				// Update status
 				DetectionStatusText.Text = $"Touches detected: {activeTouches.Count}";
-				StatusText.Text = "Calibrated plane detection active";
+				StatusText.Text = "Optimized calibrated detection active";
 			}
 			catch (Exception ex)
 			{
@@ -860,16 +863,22 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					calibration.TouchArea.Width > 0 && calibration.TouchArea.Height > 0)
 				{
 					LogToFile(GetDiagnosticPath(), $"SUCCESS: Valid TouchArea loaded from Screen 2: X={calibration.TouchArea.X:F1}, Y={calibration.TouchArea.Y:F1}, W={calibration.TouchArea.Width:F1}, H={calibration.TouchArea.Height:F1}");
+					
+					// Invalidate the touch area mask since calibration data has changed
+					touchAreaMask = null;
+					LogToFile(GetDiagnosticPath(), "Touch area mask invalidated - will be recreated on next frame");
 				}
 				else
 				{
 					LogToFile(GetDiagnosticPath(), "WARNING: No valid TouchArea found from Screen 2");
+					touchAreaMask = null;
 				}
 			}
 			catch (Exception ex)
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in ValidateCalibrationData: {ex.Message}");
 				isPlaneValid = false;
+				touchAreaMask = null;
 			}
 		}
 		private void NormalizeAndOrientPlane() { }
@@ -976,36 +985,47 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				if (calibration?.TouchArea == null || OverlayCanvas == null) return;
 
-				// We need to draw a polygon, not a simple rectangle, because the mapping is not linear.
-				// We will map the four corners of the color-space TouchArea to depth-space.
-
-				var touchArea = calibration.TouchArea;
-				Point tl = ColorToDepthCoordinates(new Point(touchArea.X, touchArea.Y));
-				Point tr = ColorToDepthCoordinates(new Point(touchArea.Right, touchArea.Y));
-				Point bl = ColorToDepthCoordinates(new Point(touchArea.X, touchArea.Bottom));
-				Point br = ColorToDepthCoordinates(new Point(touchArea.Right, touchArea.Bottom));
-
-				var polygon = new System.Windows.Shapes.Polygon
+				// We will draw the individual pixels of the mask to get a perfect representation
+				if (touchAreaMask != null)
 				{
-					Points = new PointCollection { tl, tr, br, bl },
-					Stroke = Brushes.Yellow,
-					StrokeThickness = 2,
-					StrokeDashArray = new DoubleCollection { 5, 5 },
-					Fill = Brushes.Transparent
-				};
+					// Limit the number of pixels we draw for performance
+					int pixelsDrawn = 0;
+					int maxPixelsToDraw = 1000; // Limit to prevent UI lag
+					
+					for (int i = 0; i < touchAreaMask.Length && pixelsDrawn < maxPixelsToDraw; i++)
+					{
+						if (touchAreaMask[i])
+						{
+							var rect = new System.Windows.Shapes.Rectangle
+							{
+								Width = 1,
+								Height = 1,
+								Fill = Brushes.Yellow
+							};
 
-				OverlayCanvas.Children.Add(polygon);
+							int x = i % 512;
+							int y = i / 512;
 
-				var label = new TextBlock
-				{
-					Text = "Touch Area",
-					Foreground = Brushes.Yellow,
-					FontSize = 12,
-					FontWeight = FontWeights.Bold
-				};
-				Canvas.SetLeft(label, tl.X + 5);
-				Canvas.SetTop(label, tl.Y + 5);
-				OverlayCanvas.Children.Add(label);
+							Canvas.SetLeft(rect, x);
+							Canvas.SetTop(rect, y);
+							OverlayCanvas.Children.Add(rect);
+							pixelsDrawn++;
+						}
+					}
+					
+					// Add a label showing how many pixels are in the touch area
+					var label = new TextBlock
+					{
+						Text = $"Touch Area ({pixelsDrawn} pixels)",
+						Foreground = Brushes.Yellow,
+						FontSize = 12,
+						FontWeight = FontWeights.Bold,
+						Background = Brushes.Black
+					};
+					Canvas.SetLeft(label, 10);
+					Canvas.SetTop(label, 10);
+					OverlayCanvas.Children.Add(label);
+				}
 			}
 			catch (Exception ex)
 			{
@@ -1025,7 +1045,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				{
 					if (isPlaneValid && calibration?.TouchArea != null)
 					{
-						DepthInfoText.Text = "Calibrated detection: Ready ✓";
+						if (touchAreaMask != null)
+						{
+							int maskPixels = touchAreaMask.Count(m => m);
+							DepthInfoText.Text = $"Optimized detection: Ready ✓ ({maskPixels} pixels)";
+						}
+						else
+						{
+							DepthInfoText.Text = "Optimized detection: Creating mask...";
+						}
 					}
 					else if (!isPlaneValid)
 					{
@@ -1142,6 +1170,44 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			return point.X * plane.Nx + point.Y * plane.Ny + point.Z * plane.Nz + plane.D;
 		}
 		
+		// Create touch area mask for performance optimization
+		private void CreateTouchAreaMask(ushort[] depthData, int width, int height)
+		{
+			try
+			{
+				touchAreaMask = new bool[depthData.Length];
+				var touchArea = calibration.TouchArea;
+
+				for (int i = 0; i < depthData.Length; i++)
+				{
+					ushort depth = depthData[i];
+					if (depth > 0)
+					{
+						int x = i % width;
+						int y = i / width;
+
+						var depthPoint = new DepthSpacePoint { X = x, Y = y };
+						var colorPoint = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(depthPoint, depth);
+
+						if (!float.IsInfinity(colorPoint.X) && !float.IsInfinity(colorPoint.Y))
+						{
+							if (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
+								colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom)
+							{
+								touchAreaMask[i] = true;
+							}
+						}
+					}
+				}
+				LogToFile(GetDiagnosticPath(), "Touch area mask created successfully.");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in CreateTouchAreaMask: {ex.Message}");
+				touchAreaMask = null;
+			}
+		}
+
 		// Helper method to convert color coordinates to depth coordinates for visualization
 		private Point ColorToDepthCoordinates(Point colorPoint)
 		{
