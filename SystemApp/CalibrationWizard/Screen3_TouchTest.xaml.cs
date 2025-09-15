@@ -10,6 +10,7 @@ using KinectCalibrationWPF.Models;
 using KinectCalibrationWPF.Services;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
+using System.Windows.Media.Media3D;
 
 namespace KinectCalibrationWPF.CalibrationWizard
 {
@@ -31,6 +32,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private bool backgroundCaptured = false;
 		private DateTime lastBackgroundCapture = DateTime.MinValue;
 		
+		// WALL PROFILE for improved touch detection
+		private ushort[] wallProfile = null;
+		
 		// DEPTH CAMERA VIEW CONTROLS (like in video reference)
 		private double depthCameraXOffset = 0.0; // Move depth camera view left/right
 		private double depthCameraYOffset = 0.0; // Move depth camera view up/down
@@ -46,6 +50,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		}
 
 		private class Blob { public Point Center; public int Area; }
+		
+		public struct Plane
+		{
+			public double Nx, Ny, Nz, D;
+		}
 
 		// Plane cache (normalized and oriented toward camera)
 		private bool isPlaneValid = false;
@@ -317,16 +326,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				var depthBitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgr32, null);
 				var pixels = new byte[width * height * 4];
 				
-				// Get calibrated wall distance for proper visualization
-				double wallDistance = calibration?.KinectToSurfaceDistanceMeters ?? 2.5;
-				double minDepth = Math.Max(0.5, wallDistance - 0.5); // 50cm before wall
-				double maxDepth = Math.Min(8.0, wallDistance + 0.5); // 50cm after wall
+				// Use fixed depth range for visualization (no longer dependent on wall distance)
+				double minDepth = 0.5; // 50cm minimum
+				double maxDepth = 4.0; // 4m maximum
 				
 				// Pre-calculate thresholds for faster processing
 				ushort minDepthRaw = (ushort)(minDepth * 1000);
 				ushort maxDepthRaw = (ushort)(maxDepth * 1000);
-				ushort wallDepthMin = (ushort)((wallDistance - 0.02) * 1000);
-				ushort wallDepthMax = (ushort)((wallDistance + 0.02) * 1000);
 				
 				// Optimized pixel processing with reduced calculations
 				for (int i = 0; i < depthData.Length; i++)
@@ -349,22 +355,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							intensity = (byte)(255 * (1.0 - normalized));
 						}
 						
-						// Fast wall highlight check
-						if (depth >= wallDepthMin && depth <= wallDepthMax)
-						{
-							pixels[i * 4] = 0;     // Blue
-							pixels[i * 4 + 1] = intensity; // Green
-							pixels[i * 4 + 2] = 255;   // Red (makes it purple-ish)
-							pixels[i * 4 + 3] = 255;
-						}
-						else
-						{
-							// Proper grayscale mapping (BGR format)
-							pixels[i * 4] = intensity;     // Blue
-							pixels[i * 4 + 1] = intensity; // Green
-							pixels[i * 4 + 2] = intensity; // Red
-							pixels[i * 4 + 3] = 255;       // Alpha
-						}
+						// Proper grayscale mapping (BGR format)
+						pixels[i * 4] = intensity;     // Blue
+						pixels[i * 4 + 1] = intensity; // Green
+						pixels[i * 4 + 2] = intensity; // Red
+						pixels[i * 4 + 3] = 255;       // Alpha
 					}
 				}
 				
@@ -380,7 +375,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					OverlayCanvas.Height = height;
 				}
 				
-				StatusText.Text = $"Depth feed active (Wall: {wallDistance:F2}m)";
+				StatusText.Text = "Depth feed active";
 			}
 			catch (Exception ex)
 			{
@@ -485,59 +480,52 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		// OPTIMIZED TOUCH DETECTION METHOD
+		// REAL-TIME PLANE DETECTION TOUCH DETECTION METHOD
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
 			try
 			{
-				var threshold = PlaneThresholdSlider.Value * 0.001; // Convert from slider units to meters
-				var wallDistance = calibration.KinectToSurfaceDistanceMeters;
+				var threshold = PlaneThresholdSlider.Value;
+				var touchPixels = new List<Point>();
 
-				if (wallDistance <= 0)
+				// Step 1: Calculate the wall's plane in real-time
+				var plane = CalculateWallPlane(depthData, width, height);
+
+				if (plane == null)
 				{
-					// Try to auto-detect if not calibrated
-					wallDistance = AutoDetectWallDistance(depthData, width, height);
-					if (wallDistance <= 0)
-					{
-						StatusText.Text = "Wall distance not calibrated!";
-						return;
-					}
+					StatusText.Text = "Could not calculate wall plane. Make sure the TouchArea is clear.";
+					DetectionStatusText.Text = "Wall plane calculation failed";
+					return;
 				}
 
-				var touchPixels = new List<Point>();
-				const int sampleStep = 3; // Only check every 3rd pixel for performance
-				const int maxPixelsToCheck = 5000; // Limit total pixels checked per frame
-				int pixelsChecked = 0;
-
-				// Pre-calculate depth thresholds for faster comparison
-				ushort wallDepthMin = (ushort)((wallDistance - threshold) * 1000);
-				ushort wallDepthMax = (ushort)(wallDistance * 1000);
-
-				for (int y = 0; y < height && pixelsChecked < maxPixelsToCheck; y += sampleStep)
+				// Step 2: Find points that are in front of the real-time plane
+				for (int i = 0; i < depthData.Length; i++)
 				{
-					for (int x = 0; x < width && pixelsChecked < maxPixelsToCheck; x += sampleStep)
-					{
-						pixelsChecked++;
-						int index = y * width + x;
-						ushort depth = depthData[index];
+					ushort depth = depthData[i];
 
-						if (depth > 0 && depth >= wallDepthMin && depth <= wallDepthMax)
+					if (depth > 0)
+					{
+						int x = i % width;
+						int y = i / width;
+
+						var cameraPoint = DepthToCameraSpace(x, y, depth);
+
+						if (cameraPoint.HasValue)
 						{
-							// Quick depth check passed, now check touch area
-							if (IsPointInTouchArea(x, y, depth))
+							var distance = DistanceToPlane(cameraPoint.Value, plane.Value);
+
+							if (distance > 0 && distance < threshold)
 							{
-								touchPixels.Add(new Point(x, y));
-								
-								// Early exit if we find too many touch pixels (performance limit)
-								if (touchPixels.Count > 200)
+								if (IsPointInTouchArea(x, y, depth))
 								{
-									break;
+									touchPixels.Add(new Point(x, y));
 								}
 							}
 						}
 					}
 				}
 
+				// Step 3: Cluster the touch points into blobs
 				var blobs = SimpleCluster(touchPixels, 20);
 				var now = DateTime.Now;
 				var newTouches = new List<TouchPoint>();
@@ -550,72 +538,38 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						{
 							Position = blob.Center,
 							LastSeen = now,
-							Area = blob.Area,
-							Depth = wallDistance - (threshold / 2.0)
+							Area = blob.Area
 						});
 					}
 				}
 				activeTouches = newTouches;
+				
+				// Update status
+				DetectionStatusText.Text = $"Touches detected: {activeTouches.Count}";
+				StatusText.Text = "Real-time plane detection active";
 			}
 			catch (Exception ex)
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in DetectTouchesInDepthData: {ex.Message}");
+				DetectionStatusText.Text = "Error in touch detection";
 			}
 		}
 		
 		// CORRECTED COORDINATE MAPPING METHOD
 		private bool IsPointInTouchArea(int x, int y, ushort depth)
 		{
-			// Map the depth point to color space to check against the TouchArea
 			var depthPoint = new DepthSpacePoint { X = x, Y = y };
 			var colorPoint = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(depthPoint, depth);
 
 			if (!float.IsInfinity(colorPoint.X) && !float.IsInfinity(colorPoint.Y))
 			{
-				// Check if the point is within the calibrated touch area with offset adjustments
 				var touchArea = calibration.TouchArea;
-				var adjustedX = colorPoint.X - touchAreaXOffset;
-				var adjustedY = colorPoint.Y - touchAreaYOffset;
-				
-				return (adjustedX >= touchArea.X && adjustedX <= touchArea.Right &&
-						adjustedY >= touchArea.Y && adjustedY <= touchArea.Bottom);
+				return (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
+						colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom);
 			}
 			return false;
 		}
 
-		// Helper: Auto-detect wall distance
-		private double AutoDetectWallDistance(ushort[] depthData, int width, int height)
-		{
-			try
-			{
-				// Build histogram of depths
-				var histogram = new Dictionary<int, int>();
-				
-				for (int i = 0; i < depthData.Length; i += 10) // Sample every 10th pixel
-				{
-					if (depthData[i] > 500 && depthData[i] < 4000) // 0.5m to 4m range
-					{
-						int bin = depthData[i] / 50; // 5cm bins
-						if (!histogram.ContainsKey(bin))
-							histogram[bin] = 0;
-						histogram[bin]++;
-					}
-				}
-				
-				if (histogram.Count > 0)
-				{
-					// Find the most common depth (likely the wall)
-					var mostCommon = histogram.OrderByDescending(kvp => kvp.Value).First();
-					return (mostCommon.Key * 50) / 1000.0; // Convert back to meters
-				}
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in AutoDetectWallDistance: {ex.Message}");
-			}
-			
-			return 2.5; // Default fallback
-		}
 
 		// Simple clustering algorithm
 		private List<Blob> SimpleCluster(List<Point> points, double maxDist)
@@ -703,22 +657,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		private void CaptureBackgroundButton_Click(object sender, RoutedEventArgs e)
-		{
-			try
-			{
-				// Force background capture on next frame
-				backgroundCaptured = false;
-				LogToFile(GetDiagnosticPath(), "Background capture requested by user - will capture on next frame");
-				
-				MessageBox.Show("Background will be captured on the next frame. Make sure the wall is clear of any objects.", 
-					"Background Capture", MessageBoxButton.OK, MessageBoxImage.Information);
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in CaptureBackgroundButton_Click: {ex.Message}");
-			}
-		}
 		
 		private void ResetViewButton_Click(object sender, RoutedEventArgs e)
 		{
@@ -1005,7 +943,25 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(GetDiagnosticPath(), $"ERROR in DrawTouchAreaBoundary: {ex.Message}");
 			}
 		}
-		private void UpdateStatusInformation() { }
+		private void UpdateStatusInformation() 
+		{
+			try
+			{
+				if (TouchCountText != null)
+				{
+					TouchCountText.Text = $"Active touches: {activeTouches?.Count ?? 0}";
+				}
+				
+				if (DepthInfoText != null)
+				{
+					DepthInfoText.Text = "Real-time plane detection: Active ✓";
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in UpdateStatusInformation: {ex.Message}");
+			}
+		}
 		private void LogTouchDetectionDiagnostic() { }
 		private string GetDiagnosticPath() 
 		{ 
@@ -1013,5 +969,214 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			return System.IO.Path.Combine(appDir, "..", "..", "screen3_diagnostic.txt");
 		}
 		private void LogToFile(string path, string message) { System.IO.File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} - {message}\n"); }
+		
+		// Real-time plane detection helper methods
+		private Plane? CalculateWallPlane(ushort[] depthData, int width, int height)
+		{
+			var touchArea = calibration.TouchArea;
+			var points = new List<CameraSpacePoint>();
+
+			// We're going to sample points from the TouchArea to find the wall
+			for (int y = (int)touchArea.Y; y < (int)touchArea.Bottom; y += 20)
+			{
+				for (int x = (int)touchArea.X; x < (int)touchArea.Right; x += 20)
+				{
+					var depthPoint = new DepthSpacePoint { X = x, Y = y };
+					int depthIndex = (int)(depthPoint.Y * width + depthPoint.X);
+
+					if (depthIndex >= 0 && depthIndex < depthData.Length)
+					{
+						ushort depth = depthData[depthIndex];
+						if (depth > 0)
+						{
+							var cameraPoint = kinectManager.CoordinateMapper.MapDepthPointToCameraSpace(depthPoint, depth);
+							if (!float.IsInfinity(cameraPoint.X) && !float.IsInfinity(cameraPoint.Y) && !float.IsInfinity(cameraPoint.Z))
+							{
+								points.Add(cameraPoint);
+							}
+						}
+					}
+				}
+			}
+
+			if (points.Count < 10) // We need a good number of points to get an accurate plane
+			{
+				return null;
+			}
+
+			// Standard algorithm to find the best-fit plane for a set of points
+			var centroid = new CameraSpacePoint
+			{
+				X = points.Average(p => p.X),
+				Y = points.Average(p => p.Y),
+				Z = points.Average(p => p.Z)
+			};
+
+			double xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+
+			foreach (var p in points)
+			{
+				xx += (p.X - centroid.X) * (p.X - centroid.X);
+				xy += (p.X - centroid.X) * (p.Y - centroid.Y);
+				xz += (p.X - centroid.X) * (p.Z - centroid.Z);
+				yy += (p.Y - centroid.Y) * (p.Y - centroid.Y);
+				yz += (p.Y - centroid.Y) * (p.Z - centroid.Z);
+				zz += (p.Z - centroid.Z) * (p.Z - centroid.Z);
+			}
+
+			var V = new double[3, 3]
+			{
+				{ xx, xy, xz },
+				{ xy, yy, yz },
+				{ xz, yz, zz }
+			};
+
+			var evecs = new double[3, 3];
+			var evals = new double[3];
+			Jacobi(V, evals, evecs);
+
+			var normal = new Vector3D(evecs[0, 0], evecs[1, 0], evecs[2, 0]);
+			var d = -(normal.X * centroid.X + normal.Y * centroid.Y + normal.Z * centroid.Z);
+
+			return new Plane { Nx = normal.X, Ny = normal.Y, Nz = normal.Z, D = d };
+		}
+
+		private CameraSpacePoint? DepthToCameraSpace(int x, int y, ushort depth)
+		{
+			var depthPoint = new DepthSpacePoint { X = x, Y = y };
+			var cameraPoint = kinectManager.CoordinateMapper.MapDepthPointToCameraSpace(depthPoint, depth);
+
+			if (!float.IsInfinity(cameraPoint.X) && !float.IsInfinity(cameraPoint.Y) && !float.IsInfinity(cameraPoint.Z))
+			{
+				return cameraPoint;
+			}
+			return null;
+		}
+
+		private double DistanceToPlane(CameraSpacePoint point, Plane plane)
+		{
+			return point.X * plane.Nx + point.Y * plane.Ny + point.Z * plane.Nz + plane.D;
+		}
+
+		// Jacobi eigenvalue algorithm for plane fitting
+		private void Jacobi(double[,] V, double[] evals, double[,] evecs)
+		{
+			int n = 3;
+			for (int i = 0; i < n; i++)
+			{
+				for (int j = 0; j < n; j++)
+				{
+					evecs[i, j] = (i == j) ? 1.0 : 0.0;
+				}
+			}
+			
+			for (int i = 0; i < n; i++)
+			{
+				evals[i] = V[i, i];
+			}
+			
+			double[] b = new double[n];
+			double[] z = new double[n];
+			
+			for (int i = 0; i < n; i++)
+			{
+				b[i] = evals[i];
+				z[i] = 0.0;
+			}
+			
+			for (int iter = 0; iter < 50; iter++)
+			{
+				double sm = 0.0;
+				for (int p = 0; p < n - 1; p++)
+				{
+					for (int q = p + 1; q < n; q++)
+					{
+						sm += Math.Abs(V[p, q]);
+					}
+				}
+				
+				if (sm == 0.0) break;
+				
+				double tresh = (iter < 3) ? 0.2 * sm / (n * n) : 0.0;
+				
+				for (int p = 0; p < n - 1; p++)
+				{
+					for (int q = p + 1; q < n; q++)
+					{
+						double g = 100.0 * Math.Abs(V[p, q]);
+						
+						if (iter > 3 && Math.Abs(evals[p]) + g == Math.Abs(evals[p]) && Math.Abs(evals[q]) + g == Math.Abs(evals[q]))
+						{
+							V[p, q] = 0.0;
+						}
+						else if (Math.Abs(V[p, q]) > tresh)
+						{
+							double h = evals[q] - evals[p];
+							double t;
+							
+							if (Math.Abs(h) + g == Math.Abs(h))
+							{
+								t = V[p, q] / h;
+							}
+							else
+							{
+								double theta = 0.5 * h / V[p, q];
+								t = 1.0 / (Math.Abs(theta) + Math.Sqrt(1.0 + theta * theta));
+								if (theta < 0.0) t = -t;
+							}
+							
+							double c = 1.0 / Math.Sqrt(1.0 + t * t);
+							double s = t * c;
+							double tau = s / (1.0 + c);
+							h = t * V[p, q];
+							z[p] -= h;
+							z[q] += h;
+							evals[p] -= h;
+							evals[q] += h;
+							V[p, q] = 0.0;
+							
+							for (int j = 0; j < p; j++)
+							{
+								g = V[j, p];
+								h = V[j, q];
+								V[j, p] = g - s * (h + g * tau);
+								V[j, q] = h + s * (g - h * tau);
+							}
+							
+							for (int j = p + 1; j < q; j++)
+							{
+								g = V[p, j];
+								h = V[j, q];
+								V[p, j] = g - s * (h + g * tau);
+								V[j, q] = h + s * (g - h * tau);
+							}
+							
+							for (int j = q + 1; j < n; j++)
+							{
+								g = V[p, j];
+								h = V[q, j];
+								V[p, j] = g - s * (h + g * tau);
+								V[q, j] = h + s * (g - h * tau);
+							}
+							
+							for (int j = 0; j < n; j++)
+							{
+								g = evecs[j, p];
+								h = evecs[j, q];
+								evecs[j, p] = g - s * (h + g * tau);
+								evecs[j, q] = h + s * (g - h * tau);
+							}
+						}
+					}
+				}
+				
+				for (int p = 0; p < n; p++)
+				{
+					b[p] += z[p];
+					evals[p] = b[p];
+					z[p] = 0.0;
+				}
+			}
+		}
 	}
 }
