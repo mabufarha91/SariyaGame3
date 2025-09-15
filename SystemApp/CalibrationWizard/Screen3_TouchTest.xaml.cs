@@ -38,6 +38,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		// TOUCH AREA MASK for performance optimization
 		private bool[] touchAreaMask = null;
 		private WriteableBitmap touchAreaBitmap;
+		private Image touchAreaImage; // Single image control for the touch area
 		
 		// DEPTH CAMERA VIEW CONTROLS (like in video reference)
 		private double depthCameraXOffset = 0.0; // Move depth camera view left/right
@@ -687,7 +688,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Force recreation of touch area mask and bitmap
 				touchAreaMask = null;
 				touchAreaBitmap = null;
-				LogToFile(GetDiagnosticPath(), "View reset to default and touch area mask/bitmap invalidated");
+				touchAreaImage = null;
+				LogToFile(GetDiagnosticPath(), "View reset to default and touch area mask/bitmap/image invalidated");
 			}
 			catch (Exception ex)
 			{
@@ -875,13 +877,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					// Invalidate the touch area mask and bitmap since calibration data has changed
 					touchAreaMask = null;
 					touchAreaBitmap = null;
-					LogToFile(GetDiagnosticPath(), "Touch area mask and bitmap invalidated - will be recreated on next frame");
+					touchAreaImage = null;
+					LogToFile(GetDiagnosticPath(), "Touch area mask, bitmap, and image invalidated - will be recreated on next frame");
 				}
 				else
 				{
 					LogToFile(GetDiagnosticPath(), "WARNING: No valid TouchArea found from Screen 2");
 					touchAreaMask = null;
 					touchAreaBitmap = null;
+					touchAreaImage = null;
 				}
 			}
 			catch (Exception ex)
@@ -890,6 +894,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				isPlaneValid = false;
 				touchAreaMask = null;
 				touchAreaBitmap = null;
+				touchAreaImage = null;
 			}
 		}
 		private void NormalizeAndOrientPlane() { }
@@ -1018,11 +1023,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					touchAreaBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
 				}
 
-				// Now, just draw the pre-rendered bitmap to an Image control
-				if (touchAreaBitmap != null)
+				// Create the image control only once and reuse it
+				if (touchAreaBitmap != null && touchAreaImage == null)
 				{
-					var image = new Image { Source = touchAreaBitmap };
-					OverlayCanvas.Children.Add(image);
+					touchAreaImage = new Image { Source = touchAreaBitmap };
+					OverlayCanvas.Children.Add(touchAreaImage);
 				}
 			}
 			catch (Exception ex)
