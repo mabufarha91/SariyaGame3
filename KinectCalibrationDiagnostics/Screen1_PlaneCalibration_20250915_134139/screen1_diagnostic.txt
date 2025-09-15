@@ -1,0 +1,6 @@
+[13:41:39.960] === POINT PLACEMENT DIAGNOSTIC ===
+[13:41:39.960] Point 4 placed at canvas coordinates: (214.0, 250.5)
+[13:41:39.961] Point 4 color coordinates: (685.6, 647.9)
+[13:41:39.974] Point 4 3D coordinates: (-0.810, -0.310, 2.931)
+[13:41:39.974] Point 4 distance from Kinect: 2.931m
+[13:41:39.974] 

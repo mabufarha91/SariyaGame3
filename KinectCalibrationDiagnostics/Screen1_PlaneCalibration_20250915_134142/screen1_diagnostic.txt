@@ -1,0 +1,21 @@
+[13:41:42.200] === PLANE CALCULATION DIAGNOSTIC ===
+[13:41:42.200] Total points placed: 4
+[13:41:42.200] Point 1: Canvas=(209.0,120.5), Color=(669.5,231.5)
+[13:41:42.210] Point 1 3D: (-0.911, 0.904, 3.148)
+[13:41:42.211] Point 2: Canvas=(429.0,114.5), Color=(1374.3,212.2)
+[13:41:42.223] Point 2 3D: (1.090, 0.911, 2.977)
+[13:41:42.223] Point 3: Canvas=(434.0,254.5), Color=(1390.3,660.7)
+[13:41:42.235] Point 3 3D: (1.068, -0.318, 2.792)
+[13:41:42.235] Point 4: Canvas=(214.0,250.5), Color=(685.6,647.9)
+[13:41:42.247] Point 4 3D: (-0.809, -0.310, 2.927)
+[13:41:42.247] === PLANE CALCULATION RESULTS ===
+[13:41:42.248] Plane Normal: (-0.083197, 0.150294, -0.985134)
+[13:41:42.248] Plane Distance: 2.893270
+[13:41:42.248] Plane Equation: -0.083197*X + 0.150294*Y + -0.985134*Z + 2.893270 = 0
+[13:41:42.248] Plane Normal Length: 1.000000 (should be close to 1.0)
+[13:41:42.248] === PLANE QUALITY ANALYSIS ===
+[13:41:42.250] Point 1 distance to plane: 0.000000m
+[13:41:42.250] Point 2 distance to plane: 0.000000m
+[13:41:42.250] Point 3 distance to plane: 0.000000m
+[13:41:42.250] Calculated plane area: 1.253228 square meters
+[13:41:42.250] 

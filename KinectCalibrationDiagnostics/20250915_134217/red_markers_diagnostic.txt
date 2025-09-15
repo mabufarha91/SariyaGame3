@@ -1,0 +1,243 @@
+[13:42:17.680] === COMPREHENSIVE RED MARKERS DIAGNOSTIC ===
+[13:42:17.682] Timestamp: 2025-09-15 13:42:17.682
+[13:42:17.682] Window State: Normal
+[13:42:17.682] Window Size: 1000x700
+[13:42:17.682] Camera Feed Visibility: Visible
+[13:42:17.682] Camera Feed Size: 284.666666666667x160.125
+[13:42:17.682] MarkersOverlay Size: 284.666666666667x160.125
+[13:42:17.683] MarkersOverlay Children Count: 0
+[13:42:17.683] MarkersOverlay Background: #00FFFFFF
+[13:42:17.683] MarkersOverlay ClipToBounds: True
+[13:42:17.683] 
+[13:42:20.347] === DETECTION RESULT ANALYSIS ===
+[13:42:20.347] Detection Success: True
+[13:42:20.349] Detected Markers Count: 4
+[13:42:20.349] Detected Marker IDs: [3, 2, 0, 1]
+[13:42:20.350] Corners Array Length: 4
+[13:42:20.350] 
+[13:42:20.350] Marker 0 (ID: 3):
+[13:42:20.351]   Corner 0: (548.62, 563.86)
+[13:42:20.351]   Corner 1: (602.36, 565.65)
+[13:42:20.351]   Corner 2: (603.45, 627.00)
+[13:42:20.351]   Corner 3: (544.67, 627.90)
+[13:42:20.351] 
+[13:42:20.351] Marker 1 (ID: 2):
+[13:42:20.352]   Corner 0: (1154.37, 568.58)
+[13:42:20.352]   Corner 1: (1209.58, 567.88)
+[13:42:20.352]   Corner 2: (1211.46, 631.45)
+[13:42:20.352]   Corner 3: (1154.58, 630.75)
+[13:42:20.352] 
+[13:42:20.352] Marker 2 (ID: 0):
+[13:42:20.353]   Corner 0: (560.47, 226.71)
+[13:42:20.353]   Corner 1: (618.01, 228.87)
+[13:42:20.353]   Corner 2: (615.33, 288.57)
+[13:42:20.353]   Corner 3: (557.82, 287.99)
+[13:42:20.353] 
+[13:42:20.353] Marker 3 (ID: 1):
+[13:42:20.353]   Corner 0: (1150.75, 246.22)
+[13:42:20.354]   Corner 1: (1205.90, 246.64)
+[13:42:20.354]   Corner 2: (1206.31, 306.96)
+[13:42:20.354]   Corner 3: (1151.53, 305.47)
+[13:42:20.354] 
+[13:42:20.355] === OVERLAY CLEARING PROCESS ===
+[13:42:20.355] Before Clear - MarkersOverlay Children Count: 0
+[13:42:20.355] After Clear - MarkersOverlay Children Count: 0
+[13:42:20.355] 
+[13:42:20.357] === MARKER PROCESSING PHASE ===
+[13:42:20.357] Processing 4 detected markers
+[13:42:20.358] --- Processing Marker 0 (ID: 3) ---
+[13:42:20.358] Before Processing - MarkersOverlay Children Count: 0
+[13:42:20.360] === ADDING MARKER 3 ===
+[13:42:20.361] Input Quad Corners:
+[13:42:20.361]   Corner 0: (548.62, 563.86)
+[13:42:20.361]   Corner 1: (602.36, 565.65)
+[13:42:20.361]   Corner 2: (603.45, 627.00)
+[13:42:20.361]   Corner 3: (544.67, 627.90)
+[13:42:20.362] Calculated Center: (574.78, 596.10)
+[13:42:20.362] Stored in lastDetectedCentersColor. Count: 1
+[13:42:20.362] Synchronizing overlay with camera feed...
+[13:42:20.363] After sync - MarkersOverlay: 284.666666666667x160.125
+[13:42:20.365]   Camera Feed (actual): 0.0x0.0
+[13:42:20.365]   MarkersOverlay (using): 284.7x160.1
+[13:42:20.365]   ⚠️  NOTE: CameraFeed not sized, using MarkersOverlay as reference
+[13:42:20.365] Marker 3 coordinate transformation:
+[13:42:20.365]   Original detected coordinates: (574.8, 596.1)
+[13:42:20.365]   X-coordinate flip: 574.8 -> 1345.2 (flipped horizontally for red dots)
+[13:42:20.367]   Y-coordinate (direct): 596.1 (NO vertical flip for red dots)
+[13:42:20.367]   Camera coordinates (X-flipped only): (1345.2, 596.1)
+[13:42:20.367]   Camera Feed (actual): 0.0x0.0
+[13:42:20.367]   Camera Feed (using): 284.7x160.1
+[13:42:20.367]   MarkersOverlay: 284.7x160.1
+[13:42:20.367]   Camera resolution: 1920x1080
+[13:42:20.368]   Scale factor: 0.1483 (uniform scaling)
+[13:42:20.368]   Displayed image: 284.7x160.1
+[13:42:20.368]   Camera feed offset: (0.0, 0.0)
+[13:42:20.368]   No fine-tuning - using pure coordinate transformation
+[13:42:20.368]   Final canvas coordinates: (199.4, 88.4)
+[13:42:20.368]   Camera feed bounds: 284.7x160.1
+[13:42:20.368] Coordinate Transformation: Camera(574.78,596.10) -> Canvas(199.45,88.38)
+[13:42:20.368] Creating red dot ellipse...
+[13:42:20.369] Red dot properties: Width=24, Height=24, Fill=#FFFF0000, Stroke=#FFFFFF00
+[13:42:20.369] Red dot position: Left=187.45, Top=76.38
+[13:42:20.369] Red dot added to MarkersOverlay. Children count: 1
+[13:42:20.369] Forcing canvas layout update...
+[13:42:20.370] Canvas layout updated.
+[13:42:20.370] 
+[13:42:20.370]   Marker 3 corners in camera space:
+[13:42:20.370]     Corner 0: (548.6, 563.9)
+[13:42:20.370]     Corner 1: (602.4, 565.7)
+[13:42:20.371]     Corner 2: (603.4, 627.0)
+[13:42:20.371]     Corner 3: (544.7, 627.9)
+[13:42:20.371] After Processing - MarkersOverlay Children Count: 5
+[13:42:20.371] 
+[13:42:20.372] --- Processing Marker 1 (ID: 2) ---
+[13:42:20.372] Before Processing - MarkersOverlay Children Count: 5
+[13:42:20.372] === ADDING MARKER 2 ===
+[13:42:20.372] Input Quad Corners:
+[13:42:20.373]   Corner 0: (1154.37, 568.58)
+[13:42:20.373]   Corner 1: (1209.58, 567.88)
+[13:42:20.373]   Corner 2: (1211.46, 631.45)
+[13:42:20.373]   Corner 3: (1154.58, 630.75)
+[13:42:20.373] Calculated Center: (1182.50, 599.66)
+[13:42:20.374] Stored in lastDetectedCentersColor. Count: 2
+[13:42:20.374] Synchronizing overlay with camera feed...
+[13:42:20.374] After sync - MarkersOverlay: 284.666666666667x160.125
+[13:42:20.374]   Camera Feed (actual): 0.0x0.0
+[13:42:20.374]   MarkersOverlay (using): 284.7x160.1
+[13:42:20.375]   ⚠️  NOTE: CameraFeed not sized, using MarkersOverlay as reference
+[13:42:20.375] Marker 2 coordinate transformation:
+[13:42:20.375]   Original detected coordinates: (1182.5, 599.7)
+[13:42:20.375]   X-coordinate flip: 1182.5 -> 737.5 (flipped horizontally for red dots)
+[13:42:20.375]   Y-coordinate (direct): 599.7 (NO vertical flip for red dots)
+[13:42:20.375]   Camera coordinates (X-flipped only): (737.5, 599.7)
+[13:42:20.375]   Camera Feed (actual): 0.0x0.0
+[13:42:20.376]   Camera Feed (using): 284.7x160.1
+[13:42:20.377]   MarkersOverlay: 284.7x160.1
+[13:42:20.377]   Camera resolution: 1920x1080
+[13:42:20.377]   Scale factor: 0.1483 (uniform scaling)
+[13:42:20.377]   Displayed image: 284.7x160.1
+[13:42:20.377]   Camera feed offset: (0.0, 0.0)
+[13:42:20.378]   No fine-tuning - using pure coordinate transformation
+[13:42:20.378]   Final canvas coordinates: (109.3, 88.9)
+[13:42:20.378]   Camera feed bounds: 284.7x160.1
+[13:42:20.378] Coordinate Transformation: Camera(1182.50,599.66) -> Canvas(109.35,88.91)
+[13:42:20.378] Creating red dot ellipse...
+[13:42:20.379] Red dot properties: Width=24, Height=24, Fill=#FFFF0000, Stroke=#FFFFFF00
+[13:42:20.379] Red dot position: Left=97.35, Top=76.91
+[13:42:20.379] Red dot added to MarkersOverlay. Children count: 6
+[13:42:20.379] Forcing canvas layout update...
+[13:42:20.380] Canvas layout updated.
+[13:42:20.380] 
+[13:42:20.380]   Marker 2 corners in camera space:
+[13:42:20.380]     Corner 0: (1154.4, 568.6)
+[13:42:20.380]     Corner 1: (1209.6, 567.9)
+[13:42:20.380]     Corner 2: (1211.5, 631.5)
+[13:42:20.380]     Corner 3: (1154.6, 630.7)
+[13:42:20.381] After Processing - MarkersOverlay Children Count: 10
+[13:42:20.381] 
+[13:42:20.381] --- Processing Marker 2 (ID: 0) ---
+[13:42:20.381] Before Processing - MarkersOverlay Children Count: 10
+[13:42:20.381] === ADDING MARKER 0 ===
+[13:42:20.382] Input Quad Corners:
+[13:42:20.382]   Corner 0: (560.47, 226.71)
+[13:42:20.382]   Corner 1: (618.01, 228.87)
+[13:42:20.382]   Corner 2: (615.33, 288.57)
+[13:42:20.382]   Corner 3: (557.82, 287.99)
+[13:42:20.382] Calculated Center: (587.91, 258.04)
+[13:42:20.382] Stored in lastDetectedCentersColor. Count: 3
+[13:42:20.383] Synchronizing overlay with camera feed...
+[13:42:20.383] After sync - MarkersOverlay: 284.666666666667x160.125
+[13:42:20.383]   Camera Feed (actual): 0.0x0.0
+[13:42:20.383]   MarkersOverlay (using): 284.7x160.1
+[13:42:20.383]   ⚠️  NOTE: CameraFeed not sized, using MarkersOverlay as reference
+[13:42:20.383] Marker 0 coordinate transformation:
+[13:42:20.384]   Original detected coordinates: (587.9, 258.0)
+[13:42:20.384]   X-coordinate flip: 587.9 -> 1332.1 (flipped horizontally for red dots)
+[13:42:20.384]   Y-coordinate (direct): 258.0 (NO vertical flip for red dots)
+[13:42:20.384]   Camera coordinates (X-flipped only): (1332.1, 258.0)
+[13:42:20.384]   Camera Feed (actual): 0.0x0.0
+[13:42:20.385]   Camera Feed (using): 284.7x160.1
+[13:42:20.385]   MarkersOverlay: 284.7x160.1
+[13:42:20.385]   Camera resolution: 1920x1080
+[13:42:20.385]   Scale factor: 0.1483 (uniform scaling)
+[13:42:20.385]   Displayed image: 284.7x160.1
+[13:42:20.385]   Camera feed offset: (0.0, 0.0)
+[13:42:20.386]   No fine-tuning - using pure coordinate transformation
+[13:42:20.386]   Final canvas coordinates: (197.5, 38.3)
+[13:42:20.386]   Camera feed bounds: 284.7x160.1
+[13:42:20.386] Coordinate Transformation: Camera(587.91,258.04) -> Canvas(197.50,38.26)
+[13:42:20.386] Creating red dot ellipse...
+[13:42:20.386] Red dot properties: Width=24, Height=24, Fill=#FFFF0000, Stroke=#FFFFFF00
+[13:42:20.388] Red dot position: Left=185.50, Top=26.26
+[13:42:20.388] Red dot added to MarkersOverlay. Children count: 11
+[13:42:20.388] Forcing canvas layout update...
+[13:42:20.388] Canvas layout updated.
+[13:42:20.389] 
+[13:42:20.389]   Marker 0 corners in camera space:
+[13:42:20.389]     Corner 0: (560.5, 226.7)
+[13:42:20.389]     Corner 1: (618.0, 228.9)
+[13:42:20.389]     Corner 2: (615.3, 288.6)
+[13:42:20.389]     Corner 3: (557.8, 288.0)
+[13:42:20.391] After Processing - MarkersOverlay Children Count: 15
+[13:42:20.391] 
+[13:42:20.391] --- Processing Marker 3 (ID: 1) ---
+[13:42:20.391] Before Processing - MarkersOverlay Children Count: 15
+[13:42:20.391] === ADDING MARKER 1 ===
+[13:42:20.391] Input Quad Corners:
+[13:42:20.392]   Corner 0: (1150.75, 246.22)
+[13:42:20.392]   Corner 1: (1205.90, 246.64)
+[13:42:20.392]   Corner 2: (1206.31, 306.96)
+[13:42:20.393]   Corner 3: (1151.53, 305.47)
+[13:42:20.393] Calculated Center: (1178.62, 276.32)
+[13:42:20.393] Stored in lastDetectedCentersColor. Count: 4
+[13:42:20.393] Synchronizing overlay with camera feed...
+[13:42:20.393] After sync - MarkersOverlay: 284.666666666667x160.125
+[13:42:20.393]   Camera Feed (actual): 0.0x0.0
+[13:42:20.394]   MarkersOverlay (using): 284.7x160.1
+[13:42:20.394]   ⚠️  NOTE: CameraFeed not sized, using MarkersOverlay as reference
+[13:42:20.394] Marker 1 coordinate transformation:
+[13:42:20.394]   Original detected coordinates: (1178.6, 276.3)
+[13:42:20.394]   X-coordinate flip: 1178.6 -> 741.4 (flipped horizontally for red dots)
+[13:42:20.394]   Y-coordinate (direct): 276.3 (NO vertical flip for red dots)
+[13:42:20.394]   Camera coordinates (X-flipped only): (741.4, 276.3)
+[13:42:20.395]   Camera Feed (actual): 0.0x0.0
+[13:42:20.395]   Camera Feed (using): 284.7x160.1
+[13:42:20.395]   MarkersOverlay: 284.7x160.1
+[13:42:20.395]   Camera resolution: 1920x1080
+[13:42:20.395]   Scale factor: 0.1483 (uniform scaling)
+[13:42:20.395]   Displayed image: 284.7x160.1
+[13:42:20.396]   Camera feed offset: (0.0, 0.0)
+[13:42:20.396]   No fine-tuning - using pure coordinate transformation
+[13:42:20.396]   Final canvas coordinates: (109.9, 41.0)
+[13:42:20.396]   Camera feed bounds: 284.7x160.1
+[13:42:20.396] Coordinate Transformation: Camera(1178.62,276.32) -> Canvas(109.92,40.97)
+[13:42:20.398] Creating red dot ellipse...
+[13:42:20.398] Red dot properties: Width=24, Height=24, Fill=#FFFF0000, Stroke=#FFFFFF00
+[13:42:20.398] Red dot position: Left=97.92, Top=28.97
+[13:42:20.398] Red dot added to MarkersOverlay. Children count: 16
+[13:42:20.398] Forcing canvas layout update...
+[13:42:20.399] Canvas layout updated.
+[13:42:20.399] 
+[13:42:20.399]   Marker 1 corners in camera space:
+[13:42:20.399]     Corner 0: (1150.8, 246.2)
+[13:42:20.400]     Corner 1: (1205.9, 246.6)
+[13:42:20.400]     Corner 2: (1206.3, 307.0)
+[13:42:20.400]     Corner 3: (1151.5, 305.5)
+[13:42:20.401] After Processing - MarkersOverlay Children Count: 20
+[13:42:20.401] 
+[13:42:20.401] === DRAWING RECTANGLE FROM RED DOTS ===
+[13:42:20.401] Red dots count: 4
+[13:42:20.416] After rectangle - MarkersOverlay Children Count: 24
+[13:42:20.416] === MARKER DETECTION COMPLETE ===
+[13:42:20.416] Detected markers count: 4
+[13:42:20.417] Has all marker IDs: True
+[13:42:20.417] Touch area calculation will be performed when Calibrate button is pressed
+[13:42:20.417] 
+[13:42:20.418] === FINAL DIAGNOSTIC SUMMARY ===
+[13:42:20.418] Final MarkersOverlay Children Count: 24
+[13:42:20.418] Final MarkersOverlay Size: 284.666666666667x160.125
+[13:42:20.418] Final Camera Feed Size: 284.666666666667x160.125
+[13:42:20.418] Final Camera Feed Visibility: Visible
+[13:42:20.418] Final Status Text: Status: Found 4 ArUco marker(s)
+[13:42:20.419] 
+[13:42:20.419] === END OF COMPREHENSIVE RED MARKERS DIAGNOSTIC ===

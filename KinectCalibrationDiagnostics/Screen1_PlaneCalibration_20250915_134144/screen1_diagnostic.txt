@@ -1,0 +1,15 @@
+[13:41:44.816] === DEPTH DATA DIAGNOSTIC ===
+[13:41:44.818] Depth data available: 512x424, 217088 pixels
+[13:41:44.835] Depth range: 0.500m - 7.992m
+[13:41:44.835] Average depth: 2.572m
+[13:41:44.835] Valid depth pixels: 160761/217088 (74.1%)
+[13:41:44.836] 
+[13:41:44.837] === CALIBRATION SAVE DIAGNOSTIC ===
+[13:41:44.838] Attempting to save calibration data...
+[13:41:44.838] CalibrationConfig is not null
+[13:41:44.838] Plane to save: Nx=-0.083197, Ny=0.150294, Nz=-0.985134, D=2.893270
+[13:41:44.838] CornerPointsNormalized count: 4
+[13:41:44.838] CornerPointsCamera count: 4
+[13:41:44.874] Calibration saved successfully!
+[13:41:44.909] Verification - Loaded plane: Nx=-0.083197, Ny=0.150294, Nz=-0.985134, D=2.893270
+[13:41:44.910] 

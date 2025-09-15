@@ -121,7 +121,8 @@
 								</StackPanel>
 							</GroupBox>
 							
-							<Button x:Name="DiagnosticButton" Content="📊 Generate Diagnostics" Style="{StaticResource WizardButtonStyle}" Margin="0,0,0,0" Background="#FF9800" Click="DiagnosticButton_Click"/>
+							<Button x:Name="DiagnosticButton" Content="📊 Generate Diagnostics" Style="{StaticResource WizardButtonStyle}" Margin="0,0,0,10" Background="#FF9800" Click="DiagnosticButton_Click"/>
+							<Button x:Name="VerifyCalibrationButton" Content="🔍 Verify Calibration" Style="{StaticResource WizardButtonStyle}" Margin="0,0,0,0" Background="#9C27B0" Click="VerifyCalibrationButton_Click"/>
 						</StackPanel>
 					</Expander>
 					

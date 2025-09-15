@@ -1,0 +1,12 @@
+[13:41:35.537] === POINT PLACEMENT DIAGNOSTIC ===
+[13:41:35.537] Point 3 placed at canvas coordinates: (429.0, 237.5)
+[13:41:35.537] Point 3 color coordinates: (1374.3, 606.3)
+[13:41:35.546] Point 3 3D coordinates: (1.058, -0.179, 2.866)
+[13:41:35.546] Point 3 distance from Kinect: 2.866m
+[13:41:35.546] 
+[13:41:35.588] === POINT PLACEMENT DIAGNOSTIC ===
+[13:41:35.589] Point 3 placed at canvas coordinates: (429.0, 237.5)
+[13:41:35.589] Point 3 color coordinates: (1374.3, 606.3)
+[13:41:35.600] Point 3 3D coordinates: (1.059, -0.179, 2.869)
+[13:41:35.601] Point 3 distance from Kinect: 2.869m
+[13:41:35.601] 

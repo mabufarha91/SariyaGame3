@@ -62,6 +62,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Step 1: Initialize XAML components first
 				InitializeComponent();
 				
+				// Step 1.5: Fix depth camera display positioning
+				FixDepthCameraDisplay();
+				
 				// Step 2: Set basic properties
 				kinectManager = manager;
 				
@@ -231,21 +234,82 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				// Show Kinect depth feed with normalized visualization around wall distance
-				double center = (calibration != null && calibration.KinectToSurfaceDistanceMeters > 0) ? calibration.KinectToSurfaceDistanceMeters : 2.5;
-				var depthBmp = kinectManager?.GetDepthBitmapNormalized(center, 0.6, false);
-				if (depthBmp != null && DepthImage != null)
+				// Get depth frame
+				ushort[] depthData;
+				int width, height;
+				if (!kinectManager.TryGetDepthFrameRaw(out depthData, out width, out height))
 				{
-					DepthImage.Source = depthBmp;
+					StatusText.Text = "No depth data available";
+					return;
 				}
-				else if (StatusText != null)
+
+				// Create depth bitmap with proper visualization
+				var depthBitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgr32, null);
+				var pixels = new byte[width * height * 4];
+				
+				// Get calibrated wall distance for proper visualization
+				double wallDistance = calibration?.KinectToSurfaceDistanceMeters ?? 2.5;
+				double minDepth = Math.Max(0.5, wallDistance - 0.5); // 50cm before wall
+				double maxDepth = Math.Min(8.0, wallDistance + 0.5); // 50cm after wall
+				
+				for (int i = 0; i < depthData.Length; i++)
 				{
-					StatusText.Text = "Depth sensor not available";
+					ushort depth = depthData[i];
+					byte intensity = 0;
+					
+					if (depth != 0)
+					{
+						double depthInMeters = depth / 1000.0;
+						
+						// Normalize depth to 0-255 range centered on wall
+						if (depthInMeters < minDepth)
+							intensity = 255; // Very close = white
+						else if (depthInMeters > maxDepth)
+							intensity = 0; // Far = black
+						else
+						{
+							// Linear interpolation
+							double normalized = (depthInMeters - minDepth) / (maxDepth - minDepth);
+							intensity = (byte)(255 * (1.0 - normalized));
+						}
+						
+						// Highlight wall distance with special color
+						if (Math.Abs(depthInMeters - wallDistance) < 0.02) // Within 2cm of wall
+						{
+							pixels[i * 4] = 0;     // Blue
+							pixels[i * 4 + 1] = intensity; // Green
+							pixels[i * 4 + 2] = 255;   // Red (makes it purple-ish)
+							pixels[i * 4 + 3] = 255;
+					}
+					else
+					{
+							// Proper grayscale mapping (BGR format)
+							pixels[i * 4] = intensity;     // Blue
+							pixels[i * 4 + 1] = intensity; // Green
+							pixels[i * 4 + 2] = intensity; // Red
+							pixels[i * 4 + 3] = 255;       // Alpha
+						}
+					}
 				}
+				
+				depthBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+				
+				// Update the image
+				DepthImage.Source = depthBitmap;
+				
+				// FIX: Ensure proper canvas sizing
+				if (OverlayCanvas != null)
+				{
+					OverlayCanvas.Width = width;
+					OverlayCanvas.Height = height;
+				}
+				
+				StatusText.Text = $"Depth feed active (Wall: {wallDistance:F2}m)";
 			}
 			catch (Exception ex)
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in UpdateDepthVisualization: {ex.Message}");
+				StatusText.Text = "Error updating depth feed";
 			}
 		}
 		
@@ -347,7 +411,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
+			try
+		{
 			var threshold = PlaneThresholdSlider.Value;
+				
+				// DEBUG: Log the actual slider value
+				LogToFile(GetDiagnosticPath(), $"DEBUG: Slider value = {threshold:F3}m, Slider object = {(PlaneThresholdSlider != null ? "OK" : "NULL")}");
 			
 			// Clear detected pixels if visualization is enabled
 			if (showTouchDetection)
@@ -355,165 +424,207 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				detectedTouchPixels.Clear();
 			}
 			
-			// SIMPLIFIED TOUCH DETECTION - Balanced sensitivity
-			var touchPixels = new List<Point>();
-			var sampleStep = 4; // Check every 4th pixel to prevent freeze
-			
-			// Get ROI bounds
-			int roiMinX, roiMinY, roiMaxX, roiMaxY;
-			ComputeDepthRoiBounds(width, height, out roiMinX, out roiMinY, out roiMaxX, out roiMaxY);
-			
-			// Check pixels within ROI with safety limit
-			var maxPixelsToCheck = 1000; // Prevent infinite loop
-			var pixelsChecked = 0;
-			
-			for (int y = Math.Max(0, roiMinY); y <= Math.Min(height - 1, roiMaxY) && pixelsChecked < maxPixelsToCheck; y += sampleStep)
-			{
-				for (int x = Math.Max(0, roiMinX); x <= Math.Min(width - 1, roiMaxX) && pixelsChecked < maxPixelsToCheck; x += sampleStep)
+				// CRITICAL: Get calibrated wall distance
+				double wallDistance = 0;
+				if (calibration != null && calibration.KinectToSurfaceDistanceMeters > 0)
 				{
-					pixelsChecked++;
-					var depthIndex = y * width + x;
-					if (depthIndex < depthData.Length)
+					wallDistance = calibration.KinectToSurfaceDistanceMeters;
+					LogToFile(GetDiagnosticPath(), $"Using calibrated wall: {wallDistance:F3}m");
+				}
+				else
+				{
+					// Auto-detect wall as most common depth
+					wallDistance = AutoDetectWallDistance(depthData, width, height);
+					LogToFile(GetDiagnosticPath(), $"Auto-detected wall: {wallDistance:F3}m");
+				}
+				
+				// Calculate touch detection range - PROPER RANGE
+				// Use the threshold as the detection distance from the wall
+				double touchRangeMin = wallDistance - threshold; // Start detecting at threshold distance
+				double touchRangeMax = wallDistance - 0.002; // Stop 2mm from wall
+				
+				// Log the detection range for debugging
+				LogToFile(GetDiagnosticPath(), $"Touch range: {touchRangeMin:F3}m to {touchRangeMax:F3}m (slider threshold: {threshold:F3}m, range: {(touchRangeMax-touchRangeMin)*1000:F1}mm)");
+				
+				// Get ROI from TouchArea
+				int roiLeft = 0, roiTop = 0, roiRight = width - 1, roiBottom = height - 1;
+				
+				if (calibration?.TouchArea != null && calibration.TouchArea.Width > 0)
+				{
+					// Simple scaling from color to depth space
+					double scaleX = (double)width / 1920.0;
+					double scaleY = (double)height / 1080.0;
+					
+					roiLeft = (int)(calibration.TouchArea.X * scaleX);
+					roiTop = (int)(calibration.TouchArea.Y * scaleY);
+					roiRight = (int)(calibration.TouchArea.Right * scaleX);
+					roiBottom = (int)(calibration.TouchArea.Bottom * scaleY);
+					
+					// Add margin and clamp
+					roiLeft = Math.Max(0, roiLeft - 10);
+					roiTop = Math.Max(0, roiTop - 10);
+					roiRight = Math.Min(width - 1, roiRight + 10);
+					roiBottom = Math.Min(height - 1, roiBottom + 10);
+				}
+				
+				// Detect touch pixels
+				var touchPixels = new List<Point>();
+				int sampleStep = 6; // Sample every 6th pixel to reduce noise
+				int maxPixelsToDetect = 200; // Much lower safety limit
+				
+				for (int y = roiTop; y <= roiBottom && touchPixels.Count < maxPixelsToDetect; y += sampleStep)
+				{
+					for (int x = roiLeft; x <= roiRight && touchPixels.Count < maxPixelsToDetect; x += sampleStep)
 					{
-						var depthInMeters = depthData[depthIndex] / 1000.0;
-						
-						if (depthInMeters > 0 && IsPointWithinTouchThreshold(x, y, depthInMeters, threshold))
+						int idx = y * width + x;
+						if (idx >= 0 && idx < depthData.Length)
 						{
-							touchPixels.Add(new Point(x, y));
+							double depth = depthData[idx] / 1000.0;
 							
-							// Add to detected pixels for visualization
-							if (showTouchDetection)
+							// Check if within touch range
+							if (depth > 0 && depth >= touchRangeMin && depth <= touchRangeMax)
 							{
-								detectedTouchPixels.Add(new Point(x, y));
+								touchPixels.Add(new Point(x, y));
+								
+								if (showTouchDetection)
+								{
+									detectedTouchPixels.Add(new Point(x, y));
+								}
 							}
 						}
 					}
 				}
-			}
-			
-			// SIMPLIFIED CLUSTERING - Just group nearby pixels
-			var blobs = new List<Blob>();
-			if (touchPixels.Count > 0)
-			{
-				// Simple clustering: group pixels within 20 pixels of each other
-				var visited = new bool[touchPixels.Count];
-				for (int i = 0; i < touchPixels.Count; i++)
+				
+				// Log if we hit the safety limit
+				if (touchPixels.Count >= maxPixelsToDetect)
 				{
-					if (visited[i]) continue;
-					
-					var blob = new Blob { Center = touchPixels[i], Area = 1 };
-					visited[i] = true;
-					
-					// Find nearby pixels
-					for (int j = i + 1; j < touchPixels.Count; j++)
-					{
-						if (visited[j]) continue;
-						
-						var dist = Math.Sqrt(Math.Pow(touchPixels[i].X - touchPixels[j].X, 2) + 
-											Math.Pow(touchPixels[i].Y - touchPixels[j].Y, 2));
-						
-						if (dist <= 20) // Within 20 pixels
-						{
-							blob.Area++;
-							visited[j] = true;
-						}
-					}
-					
-					// Only keep blobs with minimum area
+					LogToFile(GetDiagnosticPath(), $"WARNING: Hit safety limit of {maxPixelsToDetect} pixels - touch range may be too wide!");
+				}
+			
+				// Simple clustering
+				var blobs = SimpleCluster(touchPixels, 20);
+				
+				// Update active touches
+				var now = DateTime.Now;
+				var newTouches = new List<TouchPoint>();
+				
+				foreach (var blob in blobs)
+				{
 					if (blob.Area >= minBlobAreaPoints)
 					{
-						blobs.Add(blob);
-					}
-				}
-			}
-			
-			// SIMPLIFIED TOUCH UPDATE - Just create new touches for each blob
-			activeTouches.Clear(); // Clear all existing touches
-			foreach (var blob in blobs)
-			{
-				var touch = new TouchPoint
-				{
-					Position = blob.Center,
-					Area = blob.Area,
-					LastSeen = DateTime.Now
-				};
-				activeTouches.Add(touch);
-			}
-
-			List<Blob> ClusterTouchPixels(List<Point> pts, int step)
-			{
-				var blobsLocal = new List<Blob>();
-				if (pts == null || pts.Count == 0) return blobsLocal;
-				int n = pts.Count;
-				var visited = new bool[n];
-				double linkDist = Math.Max(2, step + 1);
-				double linkDistSq = linkDist * linkDist;
-				for (int i = 0; i < n; i++)
-				{
-					if (visited[i]) continue;
-					var queue = new Queue<int>();
-					queue.Enqueue(i); visited[i] = true;
-					int area = 0; double sumX = 0, sumY = 0;
-					while (queue.Count > 0)
-					{
-						int idx = queue.Dequeue();
-						var p = pts[idx];
-						area++; sumX += p.X; sumY += p.Y;
-						for (int j = 0; j < n; j++)
+						newTouches.Add(new TouchPoint
 						{
-							if (visited[j]) continue;
-							var q = pts[j];
-							double dx = q.X - p.X, dy = q.Y - p.Y;
-							if (dx * dx + dy * dy <= linkDistSq)
-							{
-								visited[j] = true;
-								queue.Enqueue(j);
-							}
-						}
-					}
-					if (area >= minBlobAreaPoints)
-					{
-						blobsLocal.Add(new Blob
-						{
-							Center = new Point(sumX / area, sumY / area),
-							Area = area
+							Position = blob.Center,
+							LastSeen = now,
+							Area = blob.Area,
+							Depth = wallDistance - threshold/2 // Approximate
 						});
 					}
 				}
-				return blobsLocal;
-			}
-
-			void UpdateActiveTouchesFromBlobs(List<Blob> blobsIn)
-			{
-				var now = DateTime.Now;
-				var newList = new List<TouchPoint>();
-				foreach (var b in blobsIn)
+				
+				activeTouches = newTouches;
+				
+				// Log status
+				if (activeTouches.Count > 0)
 				{
-					var canvas = DepthToCanvas(new Point(b.Center.X, b.Center.Y));
-					var match = activeTouches.FirstOrDefault(t => Math.Abs(t.Position.X - canvas.X) < currentTouchSize && Math.Abs(t.Position.Y - canvas.Y) < currentTouchSize);
-					if (match != null)
+					LogToFile(GetDiagnosticPath(), $"Detected {activeTouches.Count} touches from {touchPixels.Count} pixels");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in DetectTouchesInDepthData: {ex.Message}");
+			}
+		}
+
+		// Helper: Auto-detect wall distance
+		private double AutoDetectWallDistance(ushort[] depthData, int width, int height)
+		{
+			try
+			{
+				// Build histogram of depths
+				var histogram = new Dictionary<int, int>();
+				
+				for (int i = 0; i < depthData.Length; i += 10) // Sample every 10th pixel
+				{
+					if (depthData[i] > 500 && depthData[i] < 4000) // 0.5m to 4m range
 					{
-						match.Position = new Point(
-							match.Position.X + smoothingAlpha * (canvas.X - match.Position.X),
-							match.Position.Y + smoothingAlpha * (canvas.Y - match.Position.Y)
-						);
-						match.LastSeen = now;
-						match.Area = b.Area;
-						newList.Add(match);
-					}
-					else
-					{
-						newList.Add(new TouchPoint { Position = canvas, LastSeen = now, Depth = 0, Area = b.Area });
+						int bin = depthData[i] / 50; // 5cm bins
+						if (!histogram.ContainsKey(bin))
+							histogram[bin] = 0;
+						histogram[bin]++;
 					}
 				}
-				activeTouches = newList;
+				
+				if (histogram.Count > 0)
+				{
+					// Find the most common depth (likely the wall)
+					var mostCommon = histogram.OrderByDescending(kvp => kvp.Value).First();
+					return (mostCommon.Key * 50) / 1000.0; // Convert back to meters
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in AutoDetectWallDistance: {ex.Message}");
 			}
 			
-			// Log simple results
-			if (touchPixels.Count > 0)
+			return 2.5; // Default fallback
+		}
+
+		// Simple clustering algorithm
+		private List<Blob> SimpleCluster(List<Point> points, double maxDist)
+		{
+			var blobs = new List<Blob>();
+			if (points.Count == 0) return blobs;
+			
+			var used = new bool[points.Count];
+			
+			for (int i = 0; i < points.Count; i++)
 			{
-				LogToFile(GetDiagnosticPath(), $"Touch pixels: {touchPixels.Count}, Blobs: {blobs.Count}, Active: {activeTouches.Count}");
+				if (used[i]) continue;
+				
+				var cluster = new List<Point> { points[i] };
+				used[i] = true;
+				
+				// Find all nearby points
+				bool foundNew = true;
+				while (foundNew)
+				{
+					foundNew = false;
+					for (int j = 0; j < points.Count; j++)
+					{
+						if (used[j]) continue;
+						
+						// Check distance to any point in cluster
+						foreach (var cp in cluster)
+						{
+							double dist = Math.Sqrt(Math.Pow(points[j].X - cp.X, 2) + 
+												  Math.Pow(points[j].Y - cp.Y, 2));
+							if (dist <= maxDist)
+							{
+								cluster.Add(points[j]);
+								used[j] = true;
+								foundNew = true;
+								break;
+							}
+						}
+					}
+				}
+				
+				// Calculate center
+				if (cluster.Count > 0)
+				{
+					double avgX = cluster.Average(p => p.X);
+					double avgY = cluster.Average(p => p.Y);
+					
+					blobs.Add(new Blob 
+					{ 
+						Center = new Point(avgX, avgY), 
+						Area = cluster.Count 
+					});
+				}
 			}
+			
+			return blobs;
 		}
 		
 		private bool IsPointWithinTouchThreshold(int x, int y, double depth, double threshold)
@@ -576,12 +687,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 								{
 									double distSigned = KinectManager.KinectManager.DistancePointToPlaneSignedNormalized(cp, planeNx, planeNy, planeNz, planeD);
 									var isTouchingWall = distSigned >= 0 && distSigned <= threshold;
-									// Log wall touch detection
-									if (isTouchingWall && DateTime.Now.Millisecond % 100 == 0)
-									{
+							// Log wall touch detection
+							if (isTouchingWall && DateTime.Now.Millisecond % 100 == 0)
+							{
 										LogToFile(GetDiagnosticPath(), $"WALL TOUCH: ({x},{y}) depth={depth:F3}m, plane_dist_signed={distSigned:F3}m, threshold={threshold:F3}m, TOUCHING={isTouchingWall}");
-									}
-									return isTouchingWall;
+							}
+							return isTouchingWall;
 								}
 							}
 							return false;
@@ -838,38 +949,123 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Clear overlay
 				OverlayCanvas.Children.Clear();
 				
-				// Draw touch area boundary first
-				DrawTouchAreaOverlay();
-				
-				// Draw detected touch pixels if visualization is enabled
-				if (showTouchDetection)
+				// Draw TouchArea boundary (if available)
+				if (calibration?.TouchArea != null && calibration.TouchArea.Width > 0)
 				{
-					DrawDetectedTouchPixels();
+					DrawTouchAreaBoundary();
 				}
 				
-				// Draw touch indicators
+				// Draw detected pixels if enabled
+				if (showTouchDetection && detectedTouchPixels.Count > 0)
+				{
+					// Limit the number of dots to prevent performance issues
+					int maxDots = Math.Min(200, detectedTouchPixels.Count);
+					for (int i = 0; i < maxDots; i++)
+					{
+						var pixel = detectedTouchPixels[i];
+						var dot = new Ellipse
+						{
+							Width = 2,
+							Height = 2,
+							Fill = Brushes.Cyan,
+							Stroke = Brushes.White,
+							StrokeThickness = 1
+						};
+						Canvas.SetLeft(dot, pixel.X - 1);
+						Canvas.SetTop(dot, pixel.Y - 1);
+						OverlayCanvas.Children.Add(dot);
+					}
+					
+					// Add a count indicator
+					var countText = new TextBlock
+					{
+						Text = $"Cyan dots: {maxDots}/{detectedTouchPixels.Count}",
+						Foreground = Brushes.Cyan,
+						FontSize = 10,
+						FontWeight = FontWeights.Bold,
+						Background = new SolidColorBrush(Color.FromArgb(128, 0, 0, 0))
+					};
+					Canvas.SetLeft(countText, 10);
+					Canvas.SetTop(countText, 10);
+					OverlayCanvas.Children.Add(countText);
+				}
+				
+				// Draw active touches
 				foreach (var touch in activeTouches)
 				{
+					// Red square for each touch
 					var rect = new Rectangle
 					{
-						Width = currentTouchSize,
-						Height = currentTouchSize,
+						Width = 30,
+						Height = 30,
 						Stroke = Brushes.Red,
 						StrokeThickness = 3,
-						Fill = new SolidColorBrush(Color.FromArgb(50, 255, 0, 0)) // Semi-transparent red fill
+						Fill = new SolidColorBrush(Color.FromArgb(100, 255, 0, 0))
 					};
 					
-					Canvas.SetLeft(rect, touch.Position.X - currentTouchSize / 2);
-					Canvas.SetTop(rect, touch.Position.Y - currentTouchSize / 2);
+					Canvas.SetLeft(rect, touch.Position.X - 15);
+					Canvas.SetTop(rect, touch.Position.Y - 15);
 					OverlayCanvas.Children.Add(rect);
 					
-					// Store reference for cleanup
-					touch.VisualElement = rect;
+					// Add touch info text
+					var text = new TextBlock
+					{
+						Text = $"Touch {touch.Area}pts",
+						Foreground = Brushes.Yellow,
+						FontSize = 10,
+						FontWeight = FontWeights.Bold
+					};
+					Canvas.SetLeft(text, touch.Position.X - 15);
+					Canvas.SetTop(text, touch.Position.Y - 25);
+					OverlayCanvas.Children.Add(text);
 				}
 			}
 			catch (Exception ex)
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in UpdateVisualFeedback: {ex.Message}");
+			}
+		}
+
+		// Helper: Draw TouchArea boundary
+		private void DrawTouchAreaBoundary()
+		{
+			try
+			{
+				if (calibration?.TouchArea == null) return;
+				
+				// Scale from color to depth space
+				double scaleX = 512.0 / 1920.0;
+				double scaleY = 424.0 / 1080.0;
+				
+				var rect = new Rectangle
+				{
+					Width = calibration.TouchArea.Width * scaleX,
+					Height = calibration.TouchArea.Height * scaleY,
+					Stroke = Brushes.Yellow,
+					StrokeThickness = 2,
+					StrokeDashArray = new DoubleCollection { 5, 5 },
+					Fill = Brushes.Transparent
+				};
+				
+				Canvas.SetLeft(rect, calibration.TouchArea.X * scaleX);
+				Canvas.SetTop(rect, calibration.TouchArea.Y * scaleY);
+				OverlayCanvas.Children.Add(rect);
+				
+				// Add label
+				var label = new TextBlock
+				{
+					Text = "Touch Area",
+					Foreground = Brushes.Yellow,
+					FontSize = 12,
+					FontWeight = FontWeights.Bold
+				};
+				Canvas.SetLeft(label, calibration.TouchArea.X * scaleX + 5);
+				Canvas.SetTop(label, calibration.TouchArea.Y * scaleY + 5);
+				OverlayCanvas.Children.Add(label);
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in DrawTouchAreaBoundary: {ex.Message}");
 			}
 		}
 		
@@ -1165,7 +1361,17 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		
 		private void PlaneThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
 		{
-			UpdateThresholdDisplay();
+			try
+			{
+				UpdateThresholdDisplay();
+				
+				// Log the change for debugging
+				LogToFile(GetDiagnosticPath(), $"SLIDER CHANGED: {e.NewValue:F3}m");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in PlaneThresholdSlider_ValueChanged: {ex.Message}");
+			}
 		}
 		
 		// TouchSizeSlider and TouchArea offset sliders removed in simplified UI
@@ -1396,7 +1602,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(GetDiagnosticPath(), $"ERROR in DepthCameraZoomSlider_ValueChanged: {ex.Message}");
 			}
 		}
-
+		
 		private void ResetViewButton_Click(object sender, RoutedEventArgs e)
 		{
 			try
@@ -1846,6 +2052,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
+
 		private void MinBlobAreaSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
 		{
 			try
@@ -1875,6 +2082,83 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			catch (Exception ex)
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in FlipDepthVerticallyCheckBox_Changed: {ex.Message}");
+			}
+		}
+
+		// FIX: Proper camera feed positioning
+		private void FixDepthCameraDisplay()
+		{
+			try
+			{
+				// Ensure the depth view container is properly sized
+				if (DepthViewContainer != null)
+				{
+					DepthViewContainer.Width = 640;  // Set explicit width
+					DepthViewContainer.Height = 480; // Set explicit height
+					DepthViewContainer.Stretch = Stretch.Uniform;
+					DepthViewContainer.StretchDirection = StretchDirection.Both;
+					DepthViewContainer.HorizontalAlignment = HorizontalAlignment.Center;
+					DepthViewContainer.VerticalAlignment = VerticalAlignment.Center;
+				}
+				
+				// Ensure the overlay canvas matches
+				if (OverlayCanvas != null)
+				{
+					OverlayCanvas.Width = 512;
+					OverlayCanvas.Height = 424;
+				}
+				
+				LogToFile(GetDiagnosticPath(), "Depth camera display fixed - Viewbox sized to 640x480");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in FixDepthCameraDisplay: {ex.Message}");
+			}
+		}
+
+		private void VerifyCalibrationButton_Click(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				string report = "=== CALIBRATION VERIFICATION ===\n\n";
+				
+				// Check Screen 1 data (Wall plane)
+				report += "SCREEN 1 (Wall Plane):\n";
+				if (calibration?.Plane != null)
+				{
+					report += $"✓ Plane: ({calibration.Plane.Nx:F3}, {calibration.Plane.Ny:F3}, {calibration.Plane.Nz:F3})\n";
+					report += $"✓ Distance: {calibration.Plane.D:F3}\n";
+				}
+				else
+				{
+					report += "✗ No plane data!\n";
+				}
+				
+				report += $"✓ Wall Distance: {calibration?.KinectToSurfaceDistanceMeters:F3}m\n\n";
+				
+				// Check Screen 2 data (TouchArea)
+				report += "SCREEN 2 (TouchArea):\n";
+				if (calibration?.TouchArea != null && calibration.TouchArea.Width > 0)
+				{
+					report += $"✓ Position: ({calibration.TouchArea.X}, {calibration.TouchArea.Y})\n";
+					report += $"✓ Size: {calibration.TouchArea.Width} x {calibration.TouchArea.Height}\n";
+				}
+				else
+				{
+					report += "✗ No TouchArea data!\n";
+				}
+				
+				// Check current settings
+				report += "\nCURRENT SETTINGS:\n";
+				report += $"✓ Sensitivity: {PlaneThresholdSlider?.Value:F3}m\n";
+				report += $"✓ Min Touch Size: {MinBlobAreaSlider?.Value} points\n";
+				report += $"✓ Touch Detection: {(showTouchDetection ? "ON" : "OFF")}\n";
+				
+				MessageBox.Show(report, "Calibration Status", MessageBoxButton.OK, MessageBoxImage.Information);
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show($"Error verifying calibration: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
 			}
 		}
 	}
