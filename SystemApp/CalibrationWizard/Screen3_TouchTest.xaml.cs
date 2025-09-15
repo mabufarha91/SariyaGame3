@@ -37,6 +37,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		
 		// TOUCH AREA MASK for performance optimization
 		private bool[] touchAreaMask = null;
+		private WriteableBitmap touchAreaBitmap;
 		
 		// DEPTH CAMERA VIEW CONTROLS (like in video reference)
 		private double depthCameraXOffset = 0.0; // Move depth camera view left/right
@@ -171,6 +172,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				// Initialize sliders after UI is fully loaded
 				InitializeSliders();
+				
+				// Run initial diagnostics
+				RunInitialDiagnostics();
 				
 				LogToFile(GetDiagnosticPath(), "UI elements and sliders initialized after Loaded event");
 			}
@@ -680,9 +684,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				depthCameraZoom = 1.0;
 				UpdateUnifiedViewTransform();
 				
-				// Force recreation of touch area mask
+				// Force recreation of touch area mask and bitmap
 				touchAreaMask = null;
-				LogToFile(GetDiagnosticPath(), "View reset to default and touch area mask invalidated");
+				touchAreaBitmap = null;
+				LogToFile(GetDiagnosticPath(), "View reset to default and touch area mask/bitmap invalidated");
 			}
 			catch (Exception ex)
 			{
@@ -867,14 +872,16 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				{
 					LogToFile(GetDiagnosticPath(), $"SUCCESS: Valid TouchArea loaded from Screen 2: X={calibration.TouchArea.X:F1}, Y={calibration.TouchArea.Y:F1}, W={calibration.TouchArea.Width:F1}, H={calibration.TouchArea.Height:F1}");
 					
-					// Invalidate the touch area mask since calibration data has changed
+					// Invalidate the touch area mask and bitmap since calibration data has changed
 					touchAreaMask = null;
-					LogToFile(GetDiagnosticPath(), "Touch area mask invalidated - will be recreated on next frame");
+					touchAreaBitmap = null;
+					LogToFile(GetDiagnosticPath(), "Touch area mask and bitmap invalidated - will be recreated on next frame");
 				}
 				else
 				{
 					LogToFile(GetDiagnosticPath(), "WARNING: No valid TouchArea found from Screen 2");
 					touchAreaMask = null;
+					touchAreaBitmap = null;
 				}
 			}
 			catch (Exception ex)
@@ -882,6 +889,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(GetDiagnosticPath(), $"ERROR in ValidateCalibrationData: {ex.Message}");
 				isPlaneValid = false;
 				touchAreaMask = null;
+				touchAreaBitmap = null;
 			}
 		}
 		private void NormalizeAndOrientPlane() { }
@@ -986,46 +994,35 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				if (calibration?.TouchArea == null || OverlayCanvas == null) return;
+				if (OverlayCanvas == null) return;
 
-				// We will draw the individual pixels of the mask to get a perfect representation
-				if (touchAreaMask != null)
+				// If the bitmap hasn't been created yet, create it from the mask
+				if (touchAreaBitmap == null && touchAreaMask != null)
 				{
-					int pixelsDrawn = 0;
-					
+					int width = 512;
+					int height = 424;
+					touchAreaBitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+					var pixels = new byte[width * height * 4];
+
 					for (int i = 0; i < touchAreaMask.Length; i++)
 					{
 						if (touchAreaMask[i])
 						{
-							var rect = new System.Windows.Shapes.Rectangle
-							{
-								Width = 1,
-								Height = 1,
-								Fill = Brushes.Yellow
-							};
-
-							int x = i % 512;
-							int y = i / 512;
-
-							Canvas.SetLeft(rect, x);
-							Canvas.SetTop(rect, y);
-							OverlayCanvas.Children.Add(rect);
-							pixelsDrawn++;
+							int index = i * 4;
+							pixels[index] = 0;       // Blue
+							pixels[index + 1] = 255; // Green
+							pixels[index + 2] = 255; // Red
+							pixels[index + 3] = 100; // Alpha (semi-transparent)
 						}
 					}
-					
-					// Add a label showing how many pixels are in the touch area
-					var label = new TextBlock
-					{
-						Text = $"Touch Area ({pixelsDrawn} pixels)",
-						Foreground = Brushes.Yellow,
-						FontSize = 12,
-						FontWeight = FontWeights.Bold,
-						Background = Brushes.Black
-					};
-					Canvas.SetLeft(label, 10);
-					Canvas.SetTop(label, 10);
-					OverlayCanvas.Children.Add(label);
+					touchAreaBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+				}
+
+				// Now, just draw the pre-rendered bitmap to an Image control
+				if (touchAreaBitmap != null)
+				{
+					var image = new Image { Source = touchAreaBitmap };
+					OverlayCanvas.Children.Add(image);
 				}
 			}
 			catch (Exception ex)
@@ -1093,6 +1090,40 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in LogTouchDetectionDiagnostic: {ex.Message}");
 			}
+		}
+
+		private void RunInitialDiagnostics()
+		{
+			var diagnosticPath = GetDiagnosticPath();
+			LogToFile(diagnosticPath, "=== SCREEN 3 INITIAL DIAGNOSTIC ===");
+			LogToFile(diagnosticPath, $"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
+
+			// Log calibration data
+			if (calibration != null)
+			{
+				LogToFile(diagnosticPath, "--- Calibration Data ---");
+				LogToFile(diagnosticPath, $"TouchArea: X={calibration.TouchArea.X}, Y={calibration.TouchArea.Y}, W={calibration.TouchArea.Width}, H={calibration.TouchArea.Height}");
+				LogToFile(diagnosticPath, $"Plane: Nx={calibration.Plane.Nx}, Ny={calibration.Plane.Ny}, Nz={calibration.Plane.Nz}, D={calibration.Plane.D}");
+				LogToFile(diagnosticPath, $"Kinect to Surface Distance: {calibration.KinectToSurfaceDistanceMeters}m");
+			}
+			else
+			{
+				LogToFile(diagnosticPath, "!!! CRITICAL: Calibration data is NULL. !!!");
+			}
+
+			// Log Kinect status
+			if (kinectManager != null)
+			{
+				LogToFile(diagnosticPath, "--- Kinect Status ---");
+				LogToFile(diagnosticPath, $"Is Initialized: {kinectManager.IsInitialized}");
+				LogToFile(diagnosticPath, $"Color Stream Active: {kinectManager.IsColorStreamActive()}");
+				LogToFile(diagnosticPath, $"Depth Stream Active: {kinectManager.IsDepthStreamActive()}");
+			}
+			else
+			{
+				LogToFile(diagnosticPath, "!!! CRITICAL: KinectManager is NULL. !!!");
+			}
+			LogToFile(diagnosticPath, "=== END INITIAL DIAGNOSTIC ===");
 		}
 		private string GetDiagnosticPath() 
 		{ 
@@ -1196,12 +1227,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				touchAreaMask = new bool[depthData.Length];
 				var touchArea = calibration.TouchArea;
-				int maskPixels = 0;
 
-				// Use a more efficient approach - sample every few pixels to reduce computation
-				const int sampleStep = 2; // Check every 2nd pixel for mask creation
-				
-				for (int i = 0; i < depthData.Length; i += sampleStep)
+				for (int i = 0; i < depthData.Length; i++)
 				{
 					ushort depth = depthData[i];
 					if (depth > 0)
@@ -1217,30 +1244,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							if (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
 								colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom)
 							{
-								// Mark this pixel and nearby pixels as part of the mask
-								for (int dx = -1; dx <= 1; dx++)
-								{
-									for (int dy = -1; dy <= 1; dy++)
-									{
-										int nx = x + dx;
-										int ny = y + dy;
-										if (nx >= 0 && nx < width && ny >= 0 && ny < height)
-										{
-											int ni = ny * width + nx;
-											if (ni < touchAreaMask.Length && !touchAreaMask[ni])
-											{
-												touchAreaMask[ni] = true;
-												maskPixels++;
-											}
-										}
-									}
-								}
+								touchAreaMask[i] = true;
 							}
 						}
 					}
 				}
-				
-				LogToFile(GetDiagnosticPath(), $"Touch area mask created successfully with {maskPixels} pixels.");
+				LogToFile(GetDiagnosticPath(), "Touch area mask created.");
 			}
 			catch (Exception ex)
 			{
