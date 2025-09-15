@@ -85,8 +85,8 @@
 							<Slider x:Name="PlaneThresholdSlider" Width="200" ValueChanged="PlaneThresholdSlider_ValueChanged"/>
 							<TextBlock x:Name="ThresholdValueText" Text="0.010 m" HorizontalAlignment="Center" FontSize="14" FontWeight="Bold" Foreground="#2196F3" Margin="0,5,0,15"/>
 							
-							<TextBlock Text="🎯 Real-time plane detection is now active!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
-							<TextBlock Text="The system automatically calculates the wall plane from the TouchArea" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
+							<TextBlock Text="🎯 Using calibrated data from Screens 1 &amp; 2!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
+							<TextBlock Text="Wall plane from Screen 1 + TouchArea from Screen 2" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
 							<Button x:Name="ShowTouchDetectionButton" Content="👁️ SHOW TOUCH DETECTION" Style="{StaticResource WizardButtonStyle}" Margin="0,5,0,0" Background="#FF5722" Click="ShowTouchDetectionButton_Click"/>
 						</StackPanel>
 					</GroupBox>

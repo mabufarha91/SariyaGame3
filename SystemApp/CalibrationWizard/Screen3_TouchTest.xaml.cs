@@ -480,52 +480,61 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		// REAL-TIME PLANE DETECTION TOUCH DETECTION METHOD
+		// CALIBRATED PLANE TOUCH DETECTION METHOD (using Screen 1 & 2 data)
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
 			try
 			{
-				var threshold = PlaneThresholdSlider.Value;
-				var touchPixels = new List<Point>();
-
-				// Step 1: Calculate the wall's plane in real-time
-				var plane = CalculateWallPlane(depthData, width, height);
-
-				if (plane == null)
+				if (!isPlaneValid)
 				{
-					StatusText.Text = "Could not calculate wall plane. Make sure the TouchArea is clear.";
-					DetectionStatusText.Text = "Wall plane calculation failed";
+					StatusText.Text = "Wall plane is not valid. Please recalibrate from Screen 1.";
+					DetectionStatusText.Text = "Wall plane not calibrated";
 					return;
 				}
 
-				// Step 2: Find points that are in front of the real-time plane
-				for (int i = 0; i < depthData.Length; i++)
-				{
-					ushort depth = depthData[i];
+				var threshold = PlaneThresholdSlider.Value;
+				var touchPixels = new List<Point>();
 
-					if (depth > 0)
+				// Get the raw camera space points from the Kinect Manager
+				CameraSpacePoint[] cameraSpacePoints;
+				int depthWidth, depthHeight;
+				if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out depthWidth, out depthHeight))
+				{
+					StatusText.Text = "No camera space data available";
+					return; // No data, nothing to do
+				}
+
+				// Loop through every point in the depth frame
+				for (int i = 0; i < cameraSpacePoints.Length; i++)
+				{
+					CameraSpacePoint csp = cameraSpacePoints[i];
+
+					// Check for invalid points
+					if (float.IsInfinity(csp.X) || float.IsInfinity(csp.Y) || float.IsInfinity(csp.Z))
+					{
+						continue;
+					}
+
+					// Calculate the signed distance from the point to the calibrated plane.
+					// A positive distance means the point is in front of the wall (towards the Kinect).
+					double distanceToWall = (planeNx * csp.X + planeNy * csp.Y + planeNz * csp.Z + planeD);
+
+					// Check if the point is within the "touch" threshold in front of the wall
+					if (distanceToWall > 0 && distanceToWall < threshold)
 					{
 						int x = i % width;
 						int y = i / width;
+						ushort depth = depthData[i];
 
-						var cameraPoint = DepthToCameraSpace(x, y, depth);
-
-						if (cameraPoint.HasValue)
+						// CRUCIAL: Now, check if this point is within the calibrated TouchArea
+						if (IsPointInTouchArea(x, y, depth))
 						{
-							var distance = DistanceToPlane(cameraPoint.Value, plane.Value);
-
-							if (distance > 0 && distance < threshold)
-							{
-								if (IsPointInTouchArea(x, y, depth))
-								{
-									touchPixels.Add(new Point(x, y));
-								}
-							}
+							touchPixels.Add(new Point(x, y));
 						}
 					}
 				}
 
-				// Step 3: Cluster the touch points into blobs
+				// Cluster the touch points into blobs
 				var blobs = SimpleCluster(touchPixels, 20);
 				var now = DateTime.Now;
 				var newTouches = new List<TouchPoint>();
@@ -538,7 +547,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						{
 							Position = blob.Center,
 							LastSeen = now,
-							Area = blob.Area
+							Area = blob.Area,
+							Depth = 0 // Depth value is less important with this method
 						});
 					}
 				}
@@ -546,7 +556,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				// Update status
 				DetectionStatusText.Text = $"Touches detected: {activeTouches.Count}";
-				StatusText.Text = "Real-time plane detection active";
+				StatusText.Text = "Calibrated plane detection active";
 			}
 			catch (Exception ex)
 			{
@@ -815,7 +825,53 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		// PLACEHOLDER METHODS - These need to be implemented
 		private void FixDepthCameraDisplay() { }
 		private void InitializeScreen3Diagnostics() { }
-		private void ValidateCalibrationData() { }
+		private void ValidateCalibrationData() 
+		{
+			try
+			{
+				// Validate plane data from Screen 1
+				if (calibration?.Plane != null)
+				{
+					planeNx = calibration.Plane.Nx;
+					planeNy = calibration.Plane.Ny;
+					planeNz = calibration.Plane.Nz;
+					planeD = calibration.Plane.D;
+					
+					// Check if plane data is valid
+					if (Math.Abs(planeNx) > 0.001 && Math.Abs(planeNy) > 0.001 && Math.Abs(planeNz) > 0.001)
+					{
+						isPlaneValid = true;
+						LogToFile(GetDiagnosticPath(), $"SUCCESS: Valid plane data loaded from Screen 1: N=({planeNx:F6}, {planeNy:F6}, {planeNz:F6}), D={planeD:F6}");
+					}
+					else
+					{
+						isPlaneValid = false;
+						LogToFile(GetDiagnosticPath(), "WARNING: Plane data from Screen 1 is invalid");
+					}
+				}
+				else
+				{
+					isPlaneValid = false;
+					LogToFile(GetDiagnosticPath(), "WARNING: No plane data found from Screen 1");
+				}
+				
+				// Validate TouchArea from Screen 2
+				if (calibration?.TouchArea != null && 
+					calibration.TouchArea.Width > 0 && calibration.TouchArea.Height > 0)
+				{
+					LogToFile(GetDiagnosticPath(), $"SUCCESS: Valid TouchArea loaded from Screen 2: X={calibration.TouchArea.X:F1}, Y={calibration.TouchArea.Y:F1}, W={calibration.TouchArea.Width:F1}, H={calibration.TouchArea.Height:F1}");
+				}
+				else
+				{
+					LogToFile(GetDiagnosticPath(), "WARNING: No valid TouchArea found from Screen 2");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in ValidateCalibrationData: {ex.Message}");
+				isPlaneValid = false;
+			}
+		}
 		private void NormalizeAndOrientPlane() { }
 		private void UpdateThresholdDisplay()
 		{
@@ -919,24 +975,37 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			try
 			{
 				if (calibration?.TouchArea == null || OverlayCanvas == null) return;
-				
+
+				// We need to draw a polygon, not a simple rectangle, because the mapping is not linear.
+				// We will map the four corners of the color-space TouchArea to depth-space.
+
 				var touchArea = calibration.TouchArea;
-				
-				// Convert color space coordinates to depth space for visualization
-				// This is a simplified conversion - you might need to adjust based on your setup
-				var rect = new Rectangle
+				Point tl = ColorToDepthCoordinates(new Point(touchArea.X, touchArea.Y));
+				Point tr = ColorToDepthCoordinates(new Point(touchArea.Right, touchArea.Y));
+				Point bl = ColorToDepthCoordinates(new Point(touchArea.X, touchArea.Bottom));
+				Point br = ColorToDepthCoordinates(new Point(touchArea.Right, touchArea.Bottom));
+
+				var polygon = new System.Windows.Shapes.Polygon
 				{
-					Width = touchArea.Width * 0.27, // Approximate scale factor from color to depth
-					Height = touchArea.Height * 0.39, // Approximate scale factor from color to depth
-					Stroke = new SolidColorBrush(Colors.Yellow),
+					Points = new PointCollection { tl, tr, br, bl },
+					Stroke = Brushes.Yellow,
 					StrokeThickness = 2,
 					StrokeDashArray = new DoubleCollection { 5, 5 },
-					Fill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 0)) // Semi-transparent yellow
+					Fill = Brushes.Transparent
 				};
-				
-				Canvas.SetLeft(rect, touchArea.X * 0.27);
-				Canvas.SetTop(rect, touchArea.Y * 0.39);
-				OverlayCanvas.Children.Add(rect);
+
+				OverlayCanvas.Children.Add(polygon);
+
+				var label = new TextBlock
+				{
+					Text = "Touch Area",
+					Foreground = Brushes.Yellow,
+					FontSize = 12,
+					FontWeight = FontWeights.Bold
+				};
+				Canvas.SetLeft(label, tl.X + 5);
+				Canvas.SetTop(label, tl.Y + 5);
+				OverlayCanvas.Children.Add(label);
 			}
 			catch (Exception ex)
 			{
@@ -954,7 +1023,22 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				if (DepthInfoText != null)
 				{
-					DepthInfoText.Text = "Real-time plane detection: Active ✓";
+					if (isPlaneValid && calibration?.TouchArea != null)
+					{
+						DepthInfoText.Text = "Calibrated detection: Ready ✓";
+					}
+					else if (!isPlaneValid)
+					{
+						DepthInfoText.Text = "Screen 1 calibration: Missing ⚠️";
+					}
+					else if (calibration?.TouchArea == null)
+					{
+						DepthInfoText.Text = "Screen 2 calibration: Missing ⚠️";
+					}
+					else
+					{
+						DepthInfoText.Text = "Calibration: Incomplete ⚠️";
+					}
 				}
 			}
 			catch (Exception ex)
@@ -1056,6 +1140,36 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private double DistanceToPlane(CameraSpacePoint point, Plane plane)
 		{
 			return point.X * plane.Nx + point.Y * plane.Ny + point.Z * plane.Nz + plane.D;
+		}
+		
+		// Helper method to convert color coordinates to depth coordinates for visualization
+		private Point ColorToDepthCoordinates(Point colorPoint)
+		{
+			try
+			{
+				// Use the KinectManager's method to convert color pixel to camera space
+				CameraSpacePoint cameraPoint;
+				if (kinectManager.TryMapColorPixelToCameraSpace((int)colorPoint.X, (int)colorPoint.Y, out cameraPoint))
+				{
+					if (!float.IsInfinity(cameraPoint.X) && !float.IsInfinity(cameraPoint.Y) && !float.IsInfinity(cameraPoint.Z))
+					{
+						// Convert camera space back to depth space
+						var depthPoint = kinectManager.CoordinateMapper.MapCameraPointToDepthSpace(cameraPoint);
+						
+						if (!float.IsInfinity(depthPoint.X) && !float.IsInfinity(depthPoint.Y))
+						{
+							return new Point(depthPoint.X, depthPoint.Y);
+						}
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in ColorToDepthCoordinates: {ex.Message}");
+			}
+			
+			// Fallback: use approximate scaling if conversion fails
+			return new Point(colorPoint.X * 0.27, colorPoint.Y * 0.39);
 		}
 
 		// Jacobi eigenvalue algorithm for plane fitting
