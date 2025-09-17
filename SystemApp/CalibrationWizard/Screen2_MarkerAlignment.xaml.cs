@@ -2063,7 +2063,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			try
 			{
 				LogToFile(diagnosticPath, "=== STARTING TOUCH AREA CALCULATION ===");
-				CalculateTouchAreaAndKinectDistance(cfg, _detectedCorners, _detectedIds);
+				CalculateTouchAreaAndKinectDistance(cfg, _detectedCorners, _detectedIds, diagnosticPath);
 				LogToFile(diagnosticPath, "Touch area calculation completed successfully");
 			}
 			catch (Exception ex)
@@ -2126,6 +2126,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(diagnosticPath, $"Touch Area Valid: {touchAreaValid}");
 				LogToFile(diagnosticPath, $"Kinect Touch Verified: {kinectTouchVerified}");
 				LogToFile(diagnosticPath, $"Overall Quality: {cfg.CalibrationAccuracyScore:F2}");
+				LogToFile(diagnosticPath, $"Distance Gradient Map: {cfg.DistanceGradientMap?.Count ?? 0} sample points");
+				LogToFile(diagnosticPath, $"Distance Range: {cfg.DistanceGradientMinDistance:F3} - {cfg.DistanceGradientMaxDistance:F3} meters");
+				LogToFile(diagnosticPath, $"Average Distance: {cfg.DistanceGradientAverageDistance:F3} meters");
+				LogToFile(diagnosticPath, $"Sampling Rate: Every {cfg.DistanceGradientSamplingRate} pixels");
 				LogToFile(diagnosticPath, $"Saved to: {System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "calibration.json")}");
 				LogToFile(diagnosticPath, "");
 				LogToFile(diagnosticPath, "=== END OF DIAGNOSTIC ===");
@@ -2771,7 +2775,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		private void CalculateTouchAreaAndKinectDistance(CalibrationConfig cfg, Point2f[][] corners, int[] ids)
+		private void CalculateTouchAreaAndKinectDistance(CalibrationConfig cfg, Point2f[][] corners, int[] ids, string diagnosticPath = null)
 		{
 			try
 			{
@@ -2883,9 +2887,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					cfg.TouchDetectionThresholdMeters = Math.Max(0.02, kinectDistance * 0.05); // 5% of distance or 2cm minimum
 					cfg.TouchAreaWidthMeters = touchAreaWidthMeters;
 					cfg.TouchAreaHeightMeters = touchAreaHeightMeters;
-					cfg.TouchAreaCorners3D = validDepths.Select(m => new SerializableCameraSpacePoint(m.Value.depth3D.Value)).ToList();
+					// Order by physical position (Y first, then X) to ensure correct corner assignment
+					var sortedByPosition = validDepths.OrderBy(m => m.Value.center.Y).ThenBy(m => m.Value.center.X).ToList();
+					cfg.TouchAreaCorners3D = sortedByPosition.Select(m => new SerializableCameraSpacePoint(m.Value.depth3D.Value)).ToList();
 					cfg.AverageMarkerSizePixels = avgMarkerSize;
 					cfg.CalibrationAccuracyScore = accuracyScore;
+					
+					// Calculate distance gradient to solve Kinect angle problem
+					CalculateDistanceGradient(cfg, diagnosticPath);
 					
 					System.Diagnostics.Debug.WriteLine($"Touch Area: {touchArea.Width:F0}x{touchArea.Height:F0} pixels");
 					System.Diagnostics.Debug.WriteLine($"Kinect Distance: {kinectDistance:F3} meters");
@@ -3031,6 +3040,29 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					LogToFile(diagnosticPath, "WARNING: Limited 3D corner point data");
 				}
 				
+				// Check if distance gradient was calculated
+				if (cfg.DistanceGradientMap == null || cfg.DistanceGradientMap.Count == 0)
+				{
+					LogToFile(diagnosticPath, "WARNING: Distance gradient not calculated");
+				}
+				else
+				{
+					LogToFile(diagnosticPath, $"Distance gradient: {cfg.DistanceGradientMap.Count} sample points");
+					LogToFile(diagnosticPath, $"Distance range: {cfg.DistanceGradientMinDistance:F3} - {cfg.DistanceGradientMaxDistance:F3} meters");
+					LogToFile(diagnosticPath, $"Distance variation: {(cfg.DistanceGradientMaxDistance - cfg.DistanceGradientMinDistance):F3} meters");
+					
+					// Check if distance variation is reasonable (should be > 0 for angled Kinect)
+					double distanceVariation = cfg.DistanceGradientMaxDistance - cfg.DistanceGradientMinDistance;
+					if (distanceVariation < 0.01) // Less than 1cm variation
+					{
+						LogToFile(diagnosticPath, "WARNING: Very small distance variation - Kinect might be perfectly perpendicular");
+					}
+					else if (distanceVariation > 0.5) // More than 50cm variation
+					{
+						LogToFile(diagnosticPath, "WARNING: Very large distance variation - check Kinect positioning");
+					}
+				}
+				
 				LogToFile(diagnosticPath, "Touch area validation PASSED");
 				return true;
 			}
@@ -3097,6 +3129,131 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(diagnosticPath, $"ERROR in Kinect touch area verification: {ex.Message}");
 				return false;
 			}
+		}
+		
+		private void CalculateDistanceGradient(CalibrationConfig cfg, string logPath = null)
+		{
+			try
+			{
+				if (logPath != null) LogToFile(logPath, "=== DISTANCE GRADIENT CALCULATION ===");
+				
+				// Validate we have the required data
+				if (cfg.TouchAreaCorners3D == null || cfg.TouchAreaCorners3D.Count < 4)
+				{
+					if (logPath != null) LogToFile(logPath, "ERROR: Need 4 corner points for distance gradient");
+					return;
+				}
+				
+				if (cfg.TouchArea == null)
+				{
+					if (logPath != null) LogToFile(logPath, "ERROR: Need touch area definition for distance gradient");
+					return;
+				}
+				
+				// Validate touch area dimensions to prevent division by zero
+				if (cfg.TouchArea.Width <= 0 || cfg.TouchArea.Height <= 0)
+				{
+					if (logPath != null) LogToFile(logPath, "ERROR: Touch area has invalid dimensions for distance gradient");
+					return;
+				}
+				
+				// Clear existing gradient map
+				cfg.DistanceGradientMap.Clear();
+				
+				// Get corners and sort by physical position to ensure correct assignment
+				var corners = cfg.TouchAreaCorners3D.Select(c => c.ToCameraSpacePoint()).ToList();
+				var sortedCorners = corners.OrderBy(c => c.Y).ThenBy(c => c.X).ToList();
+
+				// Assign corners in the correct order for bilinear interpolation
+				var corner1 = sortedCorners[0]; // Top-Left (smallest Y, smallest X)
+				var corner2 = sortedCorners[1]; // Top-Right (smallest Y, largest X)  
+				var corner3 = sortedCorners[3]; // Bottom-Right (largest Y, largest X)
+				var corner4 = sortedCorners[2]; // Bottom-Left (largest Y, smallest X)
+				
+				if (logPath != null)
+				{
+					LogToFile(logPath, $"Corner 1 (TL): ({corner1.X:F3}, {corner1.Y:F3}, {corner1.Z:F3})");
+					LogToFile(logPath, $"Corner 2 (TR): ({corner2.X:F3}, {corner2.Y:F3}, {corner2.Z:F3})");
+					LogToFile(logPath, $"Corner 3 (BR): ({corner3.X:F3}, {corner3.Y:F3}, {corner3.Z:F3})");
+					LogToFile(logPath, $"Corner 4 (BL): ({corner4.X:F3}, {corner4.Y:F3}, {corner4.Z:F3})");
+				}
+				
+				// Calculate distance gradient for the entire touch area
+				double minDistance = double.MaxValue;
+				double maxDistance = double.MinValue;
+				double totalDistance = 0.0;
+				int sampleCount = 0;
+				
+				int samplingRate = cfg.DistanceGradientSamplingRate;
+				
+				for (int y = (int)cfg.TouchArea.Top; y < cfg.TouchArea.Bottom; y += samplingRate)
+				{
+					for (int x = (int)cfg.TouchArea.Left; x < cfg.TouchArea.Right; x += samplingRate)
+					{
+						// Calculate expected distance at this pixel using bilinear interpolation
+						double expectedDistance = InterpolateDistanceFrom4Corners(x, y, cfg.TouchArea, corner1, corner2, corner3, corner4);
+						
+						// Store in sparse map
+						string key = $"{x},{y}";
+						cfg.DistanceGradientMap[key] = expectedDistance;
+						
+						// Track statistics
+						minDistance = Math.Min(minDistance, expectedDistance);
+						maxDistance = Math.Max(maxDistance, expectedDistance);
+						totalDistance += expectedDistance;
+						sampleCount++;
+					}
+				}
+				
+				// Calculate average distance
+				cfg.DistanceGradientAverageDistance = sampleCount > 0 ? totalDistance / sampleCount : 0.0;
+				cfg.DistanceGradientMinDistance = minDistance;
+				cfg.DistanceGradientMaxDistance = maxDistance;
+				
+				if (logPath != null)
+				{
+					LogToFile(logPath, $"Distance Gradient Calculated:");
+					LogToFile(logPath, $"  Sampling Rate: Every {samplingRate} pixels");
+					LogToFile(logPath, $"  Sample Points: {sampleCount}");
+					LogToFile(logPath, $"  Min Distance: {minDistance:F3} meters");
+					LogToFile(logPath, $"  Max Distance: {maxDistance:F3} meters");
+					LogToFile(logPath, $"  Average Distance: {cfg.DistanceGradientAverageDistance:F3} meters");
+					LogToFile(logPath, $"  Distance Variation: {(maxDistance - minDistance):F3} meters");
+					LogToFile(logPath, $"  Gradient Map Size: {cfg.DistanceGradientMap.Count} entries");
+				}
+				
+				if (logPath != null) LogToFile(logPath, "Distance gradient calculation completed successfully");
+			}
+			catch (Exception ex)
+			{
+				if (logPath != null) LogToFile(logPath, $"ERROR in distance gradient calculation: {ex.Message}");
+			}
+		}
+		
+		private double InterpolateDistanceFrom4Corners(int x, int y, TouchAreaDefinition touchArea, 
+			CameraSpacePoint corner1, CameraSpacePoint corner2, CameraSpacePoint corner3, CameraSpacePoint corner4)
+		{
+			// Normalize coordinates to [0,1] range within the touch area
+			double normalizedX = (x - touchArea.Left) / touchArea.Width;
+			double normalizedY = (y - touchArea.Top) / touchArea.Height;
+			
+			// Clamp to [0,1] range
+			normalizedX = Math.Max(0.0, Math.Min(1.0, normalizedX));
+			normalizedY = Math.Max(0.0, Math.Min(1.0, normalizedY));
+			
+			// Bilinear interpolation between the 4 corners
+			// Corner1 = Top-Left, Corner2 = Top-Right, Corner3 = Bottom-Right, Corner4 = Bottom-Left
+			
+			// Interpolate along top edge (between corner1 and corner2)
+			double topDistance = corner1.Z + (corner2.Z - corner1.Z) * normalizedX;
+			
+			// Interpolate along bottom edge (between corner4 and corner3)
+			double bottomDistance = corner4.Z + (corner3.Z - corner4.Z) * normalizedX;
+			
+			// Interpolate between top and bottom
+			double finalDistance = topDistance + (bottomDistance - topDistance) * normalizedY;
+			
+			return finalDistance;
 		}
 	}
 	

@@ -1,0 +1,65 @@
+[00:06:48.194] ✅ Camera feed hidden to prevent detection interference (ref video method)
+[00:06:48.315] SRC: 1920x1080, stride=7680
+[00:06:48.315] STRATEGY: Fast ArUco detection (non-blocking)
+[00:06:48.315] Running comprehensive diagnostics...
+[00:06:48.319] 
+=== OPENCVSHARP4 DIAGNOSTICS ===
+[00:06:48.322] ✅ Basic Mat creation: SUCCESS (100x100)
+[00:06:48.323] ✅ OpenCV Version: 4.11.0
+[00:06:48.324] ✅ Dictionary Dict4X4_50: SUCCESS (size=4)
+[00:06:48.325] ✅ Dictionary Dict5X5_50: SUCCESS (size=5)
+[00:06:48.325] ✅ Dictionary Dict6X6_250: SUCCESS (size=6)
+[00:06:48.325] ✅ Dictionary Dict7X7_250: SUCCESS (size=7)
+[00:06:48.327] 
+--- BASIC DETECTION TEST ---
+[00:06:48.337] ✅ Basic detection test: SUCCESS - Found 0 markers (expected 0 on white image)
+[00:06:48.339] Basic test image saved: opencv_detection_test.png
+[00:06:48.342] ✅ CLAHE enhancement: SUCCESS
+[00:06:48.343] ✅ Color conversion: SUCCESS
+[00:06:48.344] 
+=== OPENCVSHARP4 DIAGNOSTICS RESULT ===
+[00:06:48.344] ✅ OPENCV STATUS: FULLY FUNCTIONAL
+[00:06:48.422] ✅ Projector window diagnostics completed
+[00:06:48.532] USING PROJECTED MARKER OPTIMIZED PARAMETERS
+[00:06:48.614] Testing image: Original
+[00:06:48.616]   Testing dictionary: Dict7X7_250
+[00:06:49.279]     Raw result: Found=0, Rejected=648
+[00:06:49.280]   Testing dictionary: Dict6X6_250
+[00:06:49.904]     Raw result: Found=1, Rejected=647
+[00:06:49.906] 
+--- STRICT ID FILTERING (ONLY IDs 0,1,2,3) ---
+[00:06:49.910] Raw detection: 1 markers with IDs: [164]
+[00:06:49.922] ❌ REJECTED: Marker ID 164 at (859.5,970.0) - not in allowed range [0,1,2,3]
+[00:06:49.923] STRICT FILTERING RESULT: 0 valid markers with IDs: [] from 1 total detected
+[00:06:49.924] FILTERED: Original + Dict6X6_250 detected 1 markers [164] but ALL were environmental markers
+[00:06:49.924]   Testing dictionary: Dict4X4_50
+[00:06:50.497]     Raw result: Found=8, Rejected=640
+[00:06:50.497] 
+--- STRICT ID FILTERING (ONLY IDs 0,1,2,3) ---
+[00:06:50.499] Raw detection: 8 markers with IDs: [37, 3, 0, 2, 1, 17, 17, 17]
+[00:06:50.499] ❌ REJECTED: Marker ID 37 at (246.8,509.1) - not in allowed range [0,1,2,3]
+[00:06:50.499] ✅ ACCEPTED: Marker ID 3 at (566.4,594.0)
+[00:06:50.499] ✅ ACCEPTED: Marker ID 0 at (580.0,260.7)
+[00:06:50.499] ✅ ACCEPTED: Marker ID 2 at (1145.2,593.4)
+[00:06:50.499] ✅ ACCEPTED: Marker ID 1 at (1142.3,283.0)
+[00:06:50.499] ❌ REJECTED: Marker ID 17 at (1131.0,742.9) - not in allowed range [0,1,2,3]
+[00:06:50.499] ❌ REJECTED: Marker ID 17 at (1505.5,118.8) - not in allowed range [0,1,2,3]
+[00:06:50.500] ❌ REJECTED: Marker ID 17 at (893.5,885.3) - not in allowed range [0,1,2,3]
+[00:06:50.500] STRICT FILTERING RESULT: 4 valid markers with IDs: [3, 0, 2, 1] from 8 total detected
+[00:06:50.500] SUCCESS: Original + Dict4X4_50 found 4 PROJECTED markers: [3,0,2,1]
+[00:06:50.500]   (Filtered from 8 total detections: [37,3,0,2,1,17,17,17])
+[00:06:50.657] 
+=== COORDINATE TRANSFORMATION ANALYSIS ===
+[00:06:50.657] Container (MarkersOverlay): 285.2x160.4
+[00:06:50.658] Camera resolution: 1920x1080
+[00:06:50.658] Detected 4 markers with IDs: [3,0,2,1]
+[00:06:50.658] 
+=== EXPECTED PROJECTOR MARKER POSITIONS ===
+[00:06:50.658] Projector markers should be at these CAMERA coordinates:
+[00:06:50.658]   - Marker 0: Should be around camera coordinates corresponding to projector position (50, 50)
+[00:06:50.658]   - Marker 1: Should be around camera coordinates corresponding to projector position (1331, 50)
+[00:06:50.658]   - Marker 2: Should be around camera coordinates corresponding to projector position (1331, 669)
+[00:06:50.658]   - Marker 3: Should be around camera coordinates corresponding to projector position (40, 669)
+[00:06:50.721] 
+⚠️  NOTE: If red dots are misplaced, the camera-to-projector coordinate mapping needs calibration!
+[00:06:50.723] ✅ Camera feed restored after detection

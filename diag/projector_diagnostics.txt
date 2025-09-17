@@ -1,0 +1,56 @@
+=== PROJECTOR WINDOW DIAGNOSTICS ===
+Window Size: 1536x864
+Canvas Size: 1536x864
+Window State: Maximized
+Visibility: Visible
+
+--- MARKER 0 ---
+Position: (50.0, 30.0)
+Size: 120.0x120.0
+Scale: 1.00x1.00
+Visibility: Visible
+Source: Loaded
+Source Size: 600x600
+Source DPI: 96.0x96.0
+Source Type: BitmapImage
+Source URI: pack://application:,,,/Assets/my/aruco_4x4_50_id_0.png
+Individual marker saved: projector_marker_0.png
+
+--- MARKER 1 ---
+Position: (1331.0, 50.0)
+Size: 120.0x120.0
+Scale: 1.00x1.00
+Visibility: Visible
+Source: Loaded
+Source Size: 600x600
+Source DPI: 96.0x96.0
+Source Type: BitmapImage
+Source URI: pack://application:,,,/Assets/my/aruco_4x4_50_id_1.png
+Individual marker saved: projector_marker_1.png
+
+--- MARKER 2 ---
+Position: (1331.0, 699.0)
+Size: 120.0x120.0
+Scale: 1.00x1.00
+Visibility: Visible
+Source: Loaded
+Source Size: 600x600
+Source DPI: 96.0x96.0
+Source Type: BitmapImage
+Source URI: pack://application:,,,/Assets/my/aruco_4x4_50_id_2.png
+Individual marker saved: projector_marker_2.png
+
+--- MARKER 3 ---
+Position: (50.0, 709.0)
+Size: 120.0x120.0
+Scale: 1.00x1.00
+Visibility: Visible
+Source: Loaded
+Source Size: 600x600
+Source DPI: 96.0x96.0
+Source Type: BitmapImage
+Source URI: pack://application:,,,/Assets/my/aruco_4x4_50_id_3.png
+Individual marker saved: projector_marker_3.png
+Full canvas screenshot saved: projector_canvas_full.png
+
+=== PROJECTOR DIAGNOSTICS COMPLETE ===

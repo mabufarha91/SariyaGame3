@@ -86,8 +86,7 @@
 							<TextBlock x:Name="ThresholdValueText" Text="0.010 m" HorizontalAlignment="Center" FontSize="14" FontWeight="Bold" Foreground="#2196F3" Margin="0,5,0,15"/>
 							
 							<TextBlock Text="🚀 Advanced optimized detection active!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
-							<TextBlock Text="Smart sampling + mask expansion for accuracy" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
-							<Button x:Name="ShowTouchDetectionButton" Content="👁️ SHOW TOUCH DETECTION" Style="{StaticResource WizardButtonStyle}" Margin="0,5,0,0" Background="#FF5722" Click="ShowTouchDetectionButton_Click"/>
+							<TextBlock Text="Smart sampling + optimized touch detection" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
 						</StackPanel>
 					</GroupBox>
 					
@@ -108,9 +107,6 @@
 						<StackPanel>
 							<GroupBox Header="Camera View" Margin="0,0,0,15">
 								<StackPanel Margin="10">
-									<TextBlock Text="Zoom" FontWeight="Bold" Margin="0,0,0,5"/>
-									<Slider x:Name="DepthCameraZoomSlider" Width="200" ValueChanged="DepthCameraZoomSlider_ValueChanged"/>
-									<TextBlock x:Name="DepthCameraZoomValueText" Text="1.0x" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
 									<CheckBox x:Name="FlipDepthVerticallyCheckBox" IsChecked="True" Content="Flip depth vertically" Checked="FlipDepthVerticallyCheckBox_Changed" Unchecked="FlipDepthVerticallyCheckBox_Changed"/>
 								</StackPanel>
 							</GroupBox>
@@ -121,18 +117,16 @@
 									<Slider x:Name="MinBlobAreaSlider" Width="200" ValueChanged="MinBlobAreaSlider_ValueChanged"/>
 									<TextBlock x:Name="MinBlobAreaValueText" Text="50 pts" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
 									
-									<TextBlock Text="Touch Area X Offset" FontWeight="Bold" Margin="0,10,0,5"/>
-									<Slider x:Name="TouchAreaXOffsetSlider" Width="200" ValueChanged="TouchAreaXOffsetSlider_ValueChanged"/>
-									<TextBlock x:Name="TouchAreaXOffsetValueText" Text="0 px" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
-									
-									<TextBlock Text="Touch Area Y Offset" FontWeight="Bold" Margin="0,0,0,5"/>
-									<Slider x:Name="TouchAreaYOffsetSlider" Width="200" ValueChanged="TouchAreaYOffsetSlider_ValueChanged"/>
-									<TextBlock x:Name="TouchAreaYOffsetValueText" Text="0 px" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
+									<!-- Touch Mode Selection -->
+									<TextBlock Text="Touch Mode" FontWeight="Bold" Margin="0,10,0,5"/>
+									<StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+										<RadioButton x:Name="HandTouchMode" Content="Hand" IsChecked="True" Margin="0,0,10,0" Checked="TouchMode_Changed"/>
+										<RadioButton x:Name="BallTouchMode" Content="Ball" Margin="0,0,10,0" Checked="TouchMode_Changed"/>
+										<RadioButton x:Name="CustomTouchMode" Content="Custom" Checked="TouchMode_Changed"/>
+									</StackPanel>
 								</StackPanel>
 							</GroupBox>
 							
-							<Button x:Name="DiagnosticButton" Content="📊 Generate Diagnostics" Style="{StaticResource WizardButtonStyle}" Margin="0,0,0,10" Background="#FF9800" Click="DiagnosticButton_Click"/>
-							<Button x:Name="VerifyCalibrationButton" Content="🔍 Verify Calibration" Style="{StaticResource WizardButtonStyle}" Margin="0,0,0,0" Background="#9C27B0" Click="VerifyCalibrationButton_Click"/>
 						</StackPanel>
 					</Expander>
 					

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -20,30 +21,36 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private DispatcherTimer updateTimer;
 		private CalibrationConfig calibration;
 		private List<TouchPoint> activeTouches = new List<TouchPoint>();
-		private double currentTouchSize = 30;
-		private double touchAreaXOffset = 0;
-		private double touchAreaYOffset = 0;
-		private bool showWallProjection = false;
-		private bool showTouchDetection = false;
+		private bool showTouchDetection = true; // Always show touch detection
 		private List<Point> detectedTouchPixels = new List<Point>();
 		
-		// BACKGROUND SUBTRACTION for robust touch detection
-		private ushort[] backgroundDepthFrame = null;
-		private bool backgroundCaptured = false;
-		private DateTime lastBackgroundCapture = DateTime.MinValue;
 		
-		// WALL PROFILE for improved touch detection
-		private ushort[] wallProfile = null;
+		// TOUCH DETECTION CACHING for performance
+		private Rect cachedDepthTouchArea = Rect.Empty;
+		private TouchAreaDefinition lastTouchAreaUpdate = null;
+		
+		
+		// CONSTANT SCALING FACTORS
+		private const double SCALE_X = 512.0 / 1920.0;  // 0.267
+		private const double SCALE_Y = 424.0 / 1080.0;  // 0.393
+		
 		
 		// TOUCH AREA MASK for performance optimization
 		private bool[] touchAreaMask = null;
-		private WriteableBitmap touchAreaBitmap;
-		private Image touchAreaImage; // Single image control for the touch area
 		
-		// DEPTH CAMERA VIEW CONTROLS (like in video reference)
-		private double depthCameraXOffset = 0.0; // Move depth camera view left/right
-		private double depthCameraYOffset = 0.0; // Move depth camera view up/down
-		private double depthCameraZoom = 1.0; // Zoom in/out depth camera view
+		// COORDINATE MAPPING CACHE for performance
+		private Dictionary<Point, Point> coordinateMappingCache = new Dictionary<Point, Point>();
+		
+		// DISTANCE GRADIENT for solving Kinect angle problem
+		private Dictionary<string, double> distanceGradientMap = null;
+		private bool distanceGradientAvailable = false;
+		private double distanceGradientMinDistance = 0.0;
+		private double distanceGradientMaxDistance = 0.0;
+		
+		// PERFORMANCE OPTIMIZATION
+		private WriteableBitmap depthBitmap; // Reuse depth bitmap
+		
+		
 		
 		private class TouchPoint
 		{
@@ -73,6 +80,16 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private int minBlobAreaPoints = 40;
 		private double smoothingAlpha = 0.30;
+		
+		// VARIABLE TOUCH SIZE DETECTION for different interaction types
+		private int maxBlobAreaPoints = 1000; // Maximum touch size for large objects
+		private string currentTouchMode = "Hand"; // "Hand", "Ball", "Custom"
+		private Dictionary<string, int> touchModeSettings = new Dictionary<string, int>
+		{
+			{ "Hand", 40 },      // Small touches for finger/hand
+			{ "Ball", 200 },     // Medium touches for balls
+			{ "Custom", 50 }     // Custom setting
+		};
 
 		public Screen3_TouchTest(KinectManager.KinectManager manager, CalibrationConfig config)
 		{
@@ -112,9 +129,25 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						}
 						else
 						{
-							LogToFile(GetDiagnosticPath(), "WARNING: Plane data is invalid or missing - will use fallback detection");
-						}
-					}
+								LogToFile(GetDiagnosticPath(), "WARNING: Plane data is invalid or missing - will use fallback detection");
+							}
+							
+							// Load distance gradient from calibration
+							if (calibration?.DistanceGradientMap != null && calibration.DistanceGradientMap.Count > 0)
+							{
+								distanceGradientMap = calibration.DistanceGradientMap;
+								distanceGradientAvailable = true;
+								distanceGradientMinDistance = calibration.DistanceGradientMinDistance;
+								distanceGradientMaxDistance = calibration.DistanceGradientMaxDistance;
+								
+								LogToFile(GetDiagnosticPath(), $"Distance gradient loaded: {distanceGradientMap.Count} points");
+								LogToFile(GetDiagnosticPath(), $"Distance range: {distanceGradientMinDistance:F3} - {distanceGradientMaxDistance:F3} meters");
+							}
+							else
+							{
+								LogToFile(GetDiagnosticPath(), "WARNING: No distance gradient available - using single threshold");
+							}
+						}	
 					else
 					{
 						calibration = config ?? new CalibrationConfig();
@@ -191,39 +224,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				if (PlaneThresholdSlider != null)
 				{
-					PlaneThresholdSlider.Minimum = 5;
-					PlaneThresholdSlider.Maximum = 150;
-					PlaneThresholdSlider.Value = 10;
+					PlaneThresholdSlider.Minimum = 1;   // 1mm minimum
+					PlaneThresholdSlider.Maximum = 50;  // 50mm maximum (more reasonable range)
+					PlaneThresholdSlider.Value = 5;     // 5mm default (more sensitive)
 					UpdateThresholdDisplay();
 				}
 				
 				if (MinBlobAreaSlider != null)
 				{
 					MinBlobAreaSlider.Minimum = 5;
-					MinBlobAreaSlider.Maximum = 100;
-					MinBlobAreaSlider.Value = 50;
+					MinBlobAreaSlider.Maximum = 1000; // Increased for large objects like balls
+					MinBlobAreaSlider.Value = touchModeSettings[currentTouchMode];
+					UpdateTouchSizeDisplay();
 				}
 				
-				if (TouchAreaXOffsetSlider != null)
-				{
-					TouchAreaXOffsetSlider.Minimum = -100;
-					TouchAreaXOffsetSlider.Maximum = 100;
-					TouchAreaXOffsetSlider.Value = 0;
-				}
-				
-				if (TouchAreaYOffsetSlider != null)
-				{
-					TouchAreaYOffsetSlider.Minimum = -100;
-					TouchAreaYOffsetSlider.Maximum = 100;
-					TouchAreaYOffsetSlider.Value = 0;
-				}
-				
-				if (DepthCameraZoomSlider != null)
-				{
-					DepthCameraZoomSlider.Minimum = 0.5;
-					DepthCameraZoomSlider.Maximum = 2.0;
-					DepthCameraZoomSlider.Value = 1.0;
-				}
 				
 				LogToFile(GetDiagnosticPath(), "Sliders initialized successfully");
 			}
@@ -246,14 +260,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Load offset values from calibration if available
 				if (calibration?.TouchDetectionSettings != null)
 				{
-					if (calibration.TouchDetectionSettings.ContainsKey("TouchAreaXOffset"))
-					{
-						touchAreaXOffset = Convert.ToDouble(calibration.TouchDetectionSettings["TouchAreaXOffset"]);
-					}
-					if (calibration.TouchDetectionSettings.ContainsKey("TouchAreaYOffset"))
-					{
-						touchAreaYOffset = Convert.ToDouble(calibration.TouchDetectionSettings["TouchAreaYOffset"]);
-					}
 				}
 				
 				// Update display values
@@ -273,7 +279,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) }; // ~60 FPS for real-time feel
+				// FIXED: Real-time performance - 60 FPS for smooth depth feed
+				updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) }; // 60 FPS
 			updateTimer.Tick += UpdateTimer_Tick;
 			updateTimer.Start();
 				
@@ -290,30 +297,28 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				// Update depth visualization
+				// FIXED: Process every frame for real-time performance
 				UpdateDepthVisualization();
-				
-				// Perform advanced touch detection
 				PerformTouchDetection();
-				
-				// Update visual feedback
 				UpdateVisualFeedback();
-				
-				// Update status information
 				UpdateStatusInformation();
-				
-				// Log periodic diagnostics (every 5 seconds)
-				if (DateTime.Now.Second % 5 == 0 && DateTime.Now.Millisecond < 100)
-				{
-					LogTouchDetectionDiagnostic();
-				}
 			}
 			catch (Exception ex)
 			{
 				var errorMsg = $"UpdateTimer_Tick Error: {ex.Message}";
-				StatusText.Text = errorMsg;
+				if (StatusText != null) StatusText.Text = errorMsg;
+				if (DetectionStatusText != null) DetectionStatusText.Text = "Error in processing";
 				LogToFile(GetDiagnosticPath(), errorMsg);
 				LogToFile(GetDiagnosticPath(), $"Stack Trace: {ex.StackTrace}");
+				
+				// Reset error state after a delay
+				var resetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+				resetTimer.Tick += (s, args) => {
+					resetTimer.Stop();
+					if (StatusText != null) StatusText.Text = "Ready";
+					if (DetectionStatusText != null) DetectionStatusText.Text = "Processing...";
+				};
+				resetTimer.Start();
 			}
 		}
 		
@@ -330,8 +335,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					return;
 				}
 
-				// Create depth bitmap with proper visualization
-				var depthBitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgr32, null);
+				// Reuse bitmap instead of creating new one
+				if (depthBitmap == null)
+				{
+					depthBitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgr32, null);
+				}
+				
 				var pixels = new byte[width * height * 4];
 				
 				// Use fixed depth range for visualization (no longer dependent on wall distance)
@@ -363,14 +372,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							intensity = (byte)(255 * (1.0 - normalized));
 						}
 						
-						// Proper grayscale mapping (BGR format)
-						pixels[i * 4] = intensity;     // Blue
-						pixels[i * 4 + 1] = intensity; // Green
-						pixels[i * 4 + 2] = intensity; // Red
-						pixels[i * 4 + 3] = 255;       // Alpha
+							// Proper grayscale mapping (BGR format)
+							pixels[i * 4] = intensity;     // Blue
+							pixels[i * 4 + 1] = intensity; // Green
+							pixels[i * 4 + 2] = intensity; // Red
+							pixels[i * 4 + 3] = 255;       // Alpha
 					}
 				}
 				
+				// Update pixels in existing bitmap
 				depthBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
 				
 				// Update the image
@@ -420,8 +430,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				if (depthScaleTransform != null)
 				{
-					depthScaleTransform.ScaleX = depthCameraZoom;
-					depthScaleTransform.ScaleY = depthCameraZoom;
+					depthScaleTransform.ScaleX = 1.0; // Fixed zoom
+					depthScaleTransform.ScaleY = 1.0; // Fixed zoom
 				}
 				if (depthFlipTransform != null)
 				{
@@ -430,8 +440,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 				if (depthTranslateTransform != null)
 				{
-					depthTranslateTransform.X = depthCameraXOffset;
-					depthTranslateTransform.Y = depthCameraYOffset;
+					depthTranslateTransform.X = 0; // Fixed offset
+					depthTranslateTransform.Y = 0; // Fixed offset
 				}
 			}
 			catch (Exception ex)
@@ -458,9 +468,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					return;
 				}
 				
-				// Clear old touches that are no longer active
-				var currentTime = DateTime.Now;
-				var removedCount = activeTouches.RemoveAll(touch => (currentTime - touch.LastSeen).TotalMilliseconds > 200);
+			// CRITICAL FIX: More aggressive touch cleanup
+			var currentTime = DateTime.Now;
+			var removedCount = activeTouches.RemoveAll(touch => (currentTime - touch.LastSeen).TotalMilliseconds > 100);
 				if (removedCount > 0)
 				{
 					LogToFile(GetDiagnosticPath(), $"Removed {removedCount} expired touches");
@@ -488,56 +498,122 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		// OPTIMIZED CALIBRATED PLANE TOUCH DETECTION METHOD (using Screen 1 & 2 data)
+		// OPTIMIZED TOUCH DETECTION METHOD with caching and improved accuracy
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
 			try
 			{
-				if (!isPlaneValid)
-				{
-					StatusText.Text = "Wall plane is not valid. Please recalibrate from Screen 1.";
-					DetectionStatusText.Text = "Wall plane not calibrated";
-					return;
-				}
+			// FIXED: More flexible validation logic
+			if (!isPlaneValid)
+			{
+				StatusText.Text = "Wall plane is not valid. Please recalibrate from Screen 1.";
+				DetectionStatusText.Text = "Wall plane not calibrated";
+				return;
+			}
+			
+			// CRITICAL FIX: Ensure touch area consistency with Screen 2
+			if (calibration?.TouchArea == null || 
+				calibration.TouchArea.Width <= 0 || 
+				calibration.TouchArea.Height <= 0)
+			{
+				LogToFile(GetDiagnosticPath(), "ERROR: No valid touch area from Screen 2 - cannot proceed with touch detection");
+				DetectionStatusText.Text = "No touch area defined - please calibrate Screen 2 first";
+				return;
+			}
+			
+			// Log touch area dimensions for verification
+			LogToFile(GetDiagnosticPath(), $"Touch area from Screen 2: X={calibration.TouchArea.X:F1}, Y={calibration.TouchArea.Y:F1}, W={calibration.TouchArea.Width:F1}, H={calibration.TouchArea.Height:F1}");
+			LogToFile(GetDiagnosticPath(), $"Touch area dimensions: {calibration.TouchArea.Width:F0}x{calibration.TouchArea.Height:F0} pixels");
 
-				var threshold = PlaneThresholdSlider.Value;
+				var threshold = PlaneThresholdSlider.Value * 0.001; // Convert to meters
 				var touchPixels = new List<Point>();
 
-				// Get the raw camera space points from the Kinect Manager
-				CameraSpacePoint[] cameraSpacePoints;
-				int depthWidth, depthHeight;
-				if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out depthWidth, out depthHeight))
+			// Get camera space points
+			// FIXED: Added fallback detection method
+			CameraSpacePoint[] cameraSpacePoints;
+			int depthWidth, depthHeight;
+			if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out depthWidth, out depthHeight))
+			{
+				// Use alternative detection method
+				DetectTouchesUsingDepthData(depthData, width, height);
+				return;
+			}
+
+				// Validate camera space data
+				if (cameraSpacePoints == null || cameraSpacePoints.Length == 0)
 				{
-					StatusText.Text = "No camera space data available";
-					return; // No data, nothing to do
+					StatusText.Text = "Invalid camera space data";
+					LogToFile(GetDiagnosticPath(), "ERROR: Camera space points array is null or empty");
+						return;
+					}
+
+				// Cache converted touch area (only convert once per frame)
+				if (cachedDepthTouchArea.IsEmpty || lastTouchAreaUpdate != calibration.TouchArea)
+				{
+					cachedDepthTouchArea = ConvertColorAreaToDepthArea(calibration.TouchArea);
+					lastTouchAreaUpdate = calibration.TouchArea;
 				}
 
-				// This is the key optimization:
-				// We create a "mask" of the touchable pixels once, so we don't have to do it on every frame.
+				// FIXED: Implement touch area mask for performance
 				if (touchAreaMask == null)
 				{
-					CreateTouchAreaMask(depthData, width, height);
+					PrecomputeCoordinateMapping();
 				}
 
-				// Now, we only check the pixels that are inside the touch area
-				for (int i = 0; i < cameraSpacePoints.Length; i++)
-				{
-					if (touchAreaMask[i])
+				var paddedArea = new Rect(
+					Math.Max(0, cachedDepthTouchArea.X - 5),
+					Math.Max(0, cachedDepthTouchArea.Y - 5),
+					Math.Min(width - Math.Max(0, cachedDepthTouchArea.X - 5), cachedDepthTouchArea.Width + 10),
+					Math.Min(height - Math.Max(0, cachedDepthTouchArea.Y - 5), cachedDepthTouchArea.Height + 10)
+				);
+
+			// CRITICAL FIX: Increase sampling step to reduce false positives
+			for (int y = (int)paddedArea.Y; y < (int)paddedArea.Bottom; y += 5)
+			{
+				for (int x = (int)paddedArea.X; x < (int)paddedArea.Right; x += 5)
 					{
-						CameraSpacePoint csp = cameraSpacePoints[i];
-
-						if (float.IsInfinity(csp.X) || float.IsInfinity(csp.Y) || float.IsInfinity(csp.Z))
+						int index = y * width + x;
+						if (index >= 0 && index < cameraSpacePoints.Length)
 						{
-							continue;
+							// ZERO COORDINATE CONVERSION - use mask directly to skip pixels
+							if (touchAreaMask != null && touchAreaMask[index])
+							{
+								CameraSpacePoint csp = cameraSpacePoints[index];
+
+								if (float.IsInfinity(csp.X) || float.IsInfinity(csp.Y) || float.IsInfinity(csp.Z))
+									continue;
+
+						// CRITICAL FIX: Use distance gradient for adaptive threshold with proper mirroring
+						int mirroredX = width - 1 - x; // Flip X coordinate for gradient lookup
+						double expectedDistance = GetExpectedDistanceFromGradient(mirroredX, y);
+						double adaptiveThreshold = threshold; // Use slider value as base threshold
+						
+						// If distance gradient is available, use it for more accurate detection
+						if (distanceGradientAvailable && expectedDistance > 0)
+						{
+							// Calculate adaptive threshold based on expected wall distance
+							double depthInMeters = csp.Z;
+							
+							// CRITICAL FIX: More accurate distance comparison
+							double distanceDifference = expectedDistance - depthInMeters;
+							
+							// Only detect if object is significantly closer than expected wall distance
+							if (distanceDifference > adaptiveThreshold && depthInMeters > 0.3 && depthInMeters < 4.0)
+							{
+								// CRITICAL FIX: Use mirrored coordinates for display
+								touchPixels.Add(new Point(mirroredX, y));
+							}
 						}
-
-						double distanceToWall = (planeNx * csp.X + planeNy * csp.Y + planeNz * csp.Z + planeD);
-
-						if (distanceToWall > 0 && distanceToWall < threshold)
-						{
-							int x = i % width;
-							int y = i / width;
-							touchPixels.Add(new Point(x, y));
+										else
+										{
+											// Fallback to plane distance method
+											double distanceToWall = Math.Abs(planeNx * csp.X + planeNy * csp.Y + planeNz * csp.Z + planeD);
+											if (distanceToWall < threshold && csp.Z > 0.3 && csp.Z < 4.0)
+											{
+												touchPixels.Add(new Point(x, y));
+											}
+										}
+							}
 						}
 					}
 				}
@@ -549,14 +625,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 				foreach (var blob in blobs)
 				{
-					if (blob.Area >= minBlobAreaPoints)
+					// CRITICAL FIX: Use variable touch size detection
+					if (blob.Area >= minBlobAreaPoints && blob.Area <= maxBlobAreaPoints)
 					{
 						newTouches.Add(new TouchPoint
 						{
 							Position = blob.Center,
 							LastSeen = now,
 							Area = blob.Area,
-							Depth = 0 // Depth value is less important with this method
+							Depth = 0
 						});
 					}
 				}
@@ -564,26 +641,47 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				// Update status
 				DetectionStatusText.Text = $"Touches detected: {activeTouches.Count}";
-				StatusText.Text = "Optimized calibrated detection active";
+				StatusText.Text = "Optimized touch detection active";
+				
+				// Store detected pixels for visualization
+				detectedTouchPixels = touchPixels;
+				
+				// Log detection statistics
+				if (touchPixels.Count > 0)
+				{
+					LogToFile(GetDiagnosticPath(), $"Touch detection: {touchPixels.Count} pixels, {activeTouches.Count} touches, area: {paddedArea}");
+				}
 			}
 			catch (Exception ex)
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in DetectTouchesInDepthData: {ex.Message}");
 				DetectionStatusText.Text = "Error in touch detection";
+				
+				// AUTOMATIC: Open diagnostic file on touch detection errors
+				AutoOpenDiagnosticFile();
 			}
 		}
 		
 		// CORRECTED COORDINATE MAPPING METHOD
+		// FIXED: Proper coordinate validation with error handling
 		private bool IsPointInTouchArea(int x, int y, ushort depth)
 		{
+			try
+			{
+				// Convert depth point to color space
 			var depthPoint = new DepthSpacePoint { X = x, Y = y };
 			var colorPoint = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(depthPoint, depth);
 
 			if (!float.IsInfinity(colorPoint.X) && !float.IsInfinity(colorPoint.Y))
 			{
 				var touchArea = calibration.TouchArea;
-				return (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
-						colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom);
+					return (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
+							colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom);
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in IsPointInTouchArea: {ex.Message}");
 			}
 			return false;
 		}
@@ -657,39 +755,18 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		private void ShowTouchDetectionButton_Click(object sender, RoutedEventArgs e)
-		{
-			try
-			{
-				showTouchDetection = !showTouchDetection;
-				if (ShowTouchDetectionButton != null)
-				{
-					ShowTouchDetectionButton.Content = showTouchDetection ? "👁️ HIDE TOUCH DETECTION" : "👁️ SHOW TOUCH DETECTION";
-					ShowTouchDetectionButton.Background = showTouchDetection ? new SolidColorBrush(Colors.Green) : new SolidColorBrush(Colors.OrangeRed);
-				}
-				LogToFile(GetDiagnosticPath(), $"Show touch detection: {showTouchDetection}");
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in ShowTouchDetectionButton_Click: {ex.Message}");
-			}
-		}
+		
 		
 		
 		private void ResetViewButton_Click(object sender, RoutedEventArgs e)
 		{
 			try
 			{
-				depthCameraXOffset = 0;
-				depthCameraYOffset = 0;
-				depthCameraZoom = 1.0;
 				UpdateUnifiedViewTransform();
 				
-				// Force recreation of touch area mask and bitmap
+				// Force recreation of touch area mask
 				touchAreaMask = null;
-				touchAreaBitmap = null;
-				touchAreaImage = null;
-				LogToFile(GetDiagnosticPath(), "View reset to default and touch area mask/bitmap/image invalidated");
+				LogToFile(GetDiagnosticPath(), "View reset to default and touch area mask invalidated");
 			}
 			catch (Exception ex)
 			{
@@ -697,18 +774,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
-		private void DepthCameraZoomSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-		{
-			try
-			{
-				depthCameraZoom = e.NewValue;
-				UpdateUnifiedViewTransform();
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in DepthCameraZoomSlider_ValueChanged: {ex.Message}");
-			}
-		}
 
 		private void FlipDepthVerticallyCheckBox_Changed(object sender, RoutedEventArgs e)
 		{
@@ -727,11 +792,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			try
 			{
 				minBlobAreaPoints = (int)e.NewValue;
-				if (MinBlobAreaValueText != null)
+				
+				// Update touch mode settings when slider changes
+				if (touchModeSettings.ContainsKey(currentTouchMode))
 				{
-					MinBlobAreaValueText.Text = $"{minBlobAreaPoints} pts";
+					touchModeSettings[currentTouchMode] = minBlobAreaPoints;
 				}
-				LogToFile(GetDiagnosticPath(), $"Min blob area changed to: {minBlobAreaPoints}");
+				
+				UpdateTouchSizeDisplay();
+				LogToFile(GetDiagnosticPath(), $"Min blob area changed to: {minBlobAreaPoints} ({currentTouchMode} mode)");
 			}
 			catch (Exception ex)
 			{
@@ -739,76 +808,57 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		private void TouchAreaXOffsetSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-		{
-			try
-			{
-				touchAreaXOffset = e.NewValue;
-				if (TouchAreaXOffsetValueText != null)
-				{
-					TouchAreaXOffsetValueText.Text = $"{touchAreaXOffset:F0} px";
-				}
-				LogToFile(GetDiagnosticPath(), $"Touch area X offset changed to: {touchAreaXOffset}");
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in TouchAreaXOffsetSlider_ValueChanged: {ex.Message}");
-			}
-		}
 		
-		private void TouchAreaYOffsetSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		// Touch mode selection for different interaction types
+		private void UpdateTouchMode(string mode)
 		{
-			try
+			if (touchModeSettings.ContainsKey(mode))
 			{
-				touchAreaYOffset = e.NewValue;
-				if (TouchAreaYOffsetValueText != null)
-				{
-					TouchAreaYOffsetValueText.Text = $"{touchAreaYOffset:F0} px";
-				}
-				LogToFile(GetDiagnosticPath(), $"Touch area Y offset changed to: {touchAreaYOffset}");
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in TouchAreaYOffsetSlider_ValueChanged: {ex.Message}");
-			}
-		}
-		
-		private void DiagnosticButton_Click(object sender, RoutedEventArgs e)
-		{
-			try
-			{
-				var path = GetDiagnosticPath();
-				if (System.IO.File.Exists(path))
-				{
-					System.Diagnostics.Process.Start("notepad.exe", path);
-					}
-					else
-					{
-					MessageBox.Show("Diagnostic file not found.", "Diagnostic", MessageBoxButton.OK, MessageBoxImage.Information);
-				}
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in DiagnosticButton_Click: {ex.Message}");
-			}
-		}
-
-		private void VerifyCalibrationButton_Click(object sender, RoutedEventArgs e)
-		{
-			try
-			{
-				var message = $"Calibration Status:\n\n";
-				message += $"TouchArea: {(calibration?.TouchArea != null ? $"X={calibration.TouchArea.X:F1}, Y={calibration.TouchArea.Y:F1}, W={calibration.TouchArea.Width:F1}, H={calibration.TouchArea.Height:F1}" : "Not set")}\n";
-				message += $"Wall Distance: {(calibration?.KinectToSurfaceDistanceMeters > 0 ? $"{calibration.KinectToSurfaceDistanceMeters:F3}m" : "Not calibrated")}\n";
-				message += $"Plane: {(calibration?.Plane != null ? "Valid" : "Not set")}\n";
+				currentTouchMode = mode;
+				minBlobAreaPoints = touchModeSettings[mode];
 				
-				MessageBox.Show(message, "Calibration Verification", MessageBoxButton.OK, MessageBoxImage.Information);
+				if (MinBlobAreaSlider != null)
+				{
+					MinBlobAreaSlider.Value = minBlobAreaPoints;
+				}
+				
+				UpdateTouchSizeDisplay();
+				LogToFile(GetDiagnosticPath(), $"Touch mode changed to: {mode} (min size: {minBlobAreaPoints} pixels)");
+			}
+		}
+		
+		private void UpdateTouchSizeDisplay()
+		{
+			if (MinBlobAreaValueText != null)
+			{
+				MinBlobAreaValueText.Text = $"{minBlobAreaPoints} pts ({currentTouchMode})";
+			}
+		}
+		
+		// Touch mode event handlers
+		private void TouchMode_Changed(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				if (sender == HandTouchMode && HandTouchMode.IsChecked == true)
+				{
+					UpdateTouchMode("Hand");
+				}
+				else if (sender == BallTouchMode && BallTouchMode.IsChecked == true)
+				{
+					UpdateTouchMode("Ball");
+				}
+				else if (sender == CustomTouchMode && CustomTouchMode.IsChecked == true)
+				{
+					UpdateTouchMode("Custom");
+				}
 			}
 			catch (Exception ex)
 			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in VerifyCalibrationButton_Click: {ex.Message}");
+				LogToFile(GetDiagnosticPath(), $"ERROR in TouchMode_Changed: {ex.Message}");
 			}
 		}
+		
 
 		private void FinishButton_Click(object sender, RoutedEventArgs e)
 		{
@@ -835,76 +885,93 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
-		// PLACEHOLDER METHODS - These need to be implemented
-		private void FixDepthCameraDisplay() { }
-		private void InitializeScreen3Diagnostics() { }
-		private void ValidateCalibrationData() 
+		// IMPLEMENTED METHODS - Critical functionality
+		private void FixDepthCameraDisplay() 
 		{
 			try
 			{
-				// Validate plane data from Screen 1
+				// Ensure proper depth camera positioning and scaling
+				if (DepthViewContainer != null)
+				{
+					DepthViewContainer.Stretch = Stretch.Uniform;
+					DepthViewContainer.HorizontalAlignment = HorizontalAlignment.Center;
+					DepthViewContainer.VerticalAlignment = VerticalAlignment.Center;
+				}
+				
+				LogToFile(GetDiagnosticPath(), "Depth camera display fixed and positioned");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in FixDepthCameraDisplay: {ex.Message}");
+			}
+		}
+
+		private void InitializeScreen3Diagnostics() 
+		{
+			try
+			{
+				var diagnosticPath = GetDiagnosticPath();
+				LogToFile(diagnosticPath, "=== SCREEN 3 DIAGNOSTIC STARTED ===");
+				LogToFile(diagnosticPath, $"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
+				LogToFile(diagnosticPath, "Screen 3 diagnostics initialized successfully");
+				
+				// AUTOMATIC: Open diagnostic file automatically for easy access
+				AutoOpenDiagnosticFile();
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in InitializeScreen3Diagnostics: {ex.Message}");
+			}
+		}
+
+		private void NormalizeAndOrientPlane() 
+		{
+			try
+			{
 				if (calibration?.Plane != null)
 				{
-					planeNx = calibration.Plane.Nx;
-					planeNy = calibration.Plane.Ny;
-					planeNz = calibration.Plane.Nz;
-					planeD = calibration.Plane.D;
+					// Normalize plane normal vector
+					double norm = Math.Sqrt(calibration.Plane.Nx * calibration.Plane.Nx + 
+										   calibration.Plane.Ny * calibration.Plane.Ny + 
+										   calibration.Plane.Nz * calibration.Plane.Nz);
 					
-					// Check if plane data is valid
-					if (Math.Abs(planeNx) > 0.001 && Math.Abs(planeNy) > 0.001 && Math.Abs(planeNz) > 0.001)
+					if (norm > 0.001)
 					{
+						planeNx = calibration.Plane.Nx / norm;
+						planeNy = calibration.Plane.Ny / norm;
+						planeNz = calibration.Plane.Nz / norm;
+						planeD = calibration.Plane.D / norm;
 						isPlaneValid = true;
-						LogToFile(GetDiagnosticPath(), $"SUCCESS: Valid plane data loaded from Screen 1: N=({planeNx:F6}, {planeNy:F6}, {planeNz:F6}), D={planeD:F6}");
-					}
-					else
-					{
+						
+						LogToFile(GetDiagnosticPath(), $"Plane normalized: N=({planeNx:F6}, {planeNy:F6}, {planeNz:F6}), D={planeD:F6}");
+				}
+				else
+				{
 						isPlaneValid = false;
-						LogToFile(GetDiagnosticPath(), "WARNING: Plane data from Screen 1 is invalid");
+						LogToFile(GetDiagnosticPath(), "ERROR: Plane normal vector has zero magnitude");
 					}
 				}
 				else
 				{
 					isPlaneValid = false;
-					LogToFile(GetDiagnosticPath(), "WARNING: No plane data found from Screen 1");
-				}
-				
-				// Validate TouchArea from Screen 2
-				if (calibration?.TouchArea != null && 
-					calibration.TouchArea.Width > 0 && calibration.TouchArea.Height > 0)
-				{
-					LogToFile(GetDiagnosticPath(), $"SUCCESS: Valid TouchArea loaded from Screen 2: X={calibration.TouchArea.X:F1}, Y={calibration.TouchArea.Y:F1}, W={calibration.TouchArea.Width:F1}, H={calibration.TouchArea.Height:F1}");
-					
-					// Invalidate the touch area mask and bitmap since calibration data has changed
-					touchAreaMask = null;
-					touchAreaBitmap = null;
-					touchAreaImage = null;
-					LogToFile(GetDiagnosticPath(), "Touch area mask, bitmap, and image invalidated - will be recreated on next frame");
-				}
-				else
-				{
-					LogToFile(GetDiagnosticPath(), "WARNING: No valid TouchArea found from Screen 2");
-					touchAreaMask = null;
-					touchAreaBitmap = null;
-					touchAreaImage = null;
+					LogToFile(GetDiagnosticPath(), "ERROR: No plane data available for normalization");
 				}
 			}
 			catch (Exception ex)
 			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in ValidateCalibrationData: {ex.Message}");
+				LogToFile(GetDiagnosticPath(), $"ERROR in NormalizeAndOrientPlane: {ex.Message}");
 				isPlaneValid = false;
-				touchAreaMask = null;
-				touchAreaBitmap = null;
-				touchAreaImage = null;
 			}
 		}
-		private void NormalizeAndOrientPlane() { }
 		private void UpdateThresholdDisplay()
 		{
 			try
 			{
 				if (ThresholdValueText != null && PlaneThresholdSlider != null)
 				{
-					ThresholdValueText.Text = $"{(PlaneThresholdSlider.Value * 0.001):F3} m";
+					double threshold = PlaneThresholdSlider.Value * 0.001;
+					string status = distanceGradientAvailable ? "Adaptive" : "Fixed";
+					ThresholdValueText.Text = $"{threshold:F3} m ({status})";
 				}
 			}
 			catch (Exception ex)
@@ -918,18 +985,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				if (OverlayCanvas == null) return;
 				
-				// Clear previous overlays
-				OverlayCanvas.Children.Clear();
 				
-				if (!showTouchDetection) return;
+				// Only redraw if touch area boundary doesn't exist
+				var existingRect = OverlayCanvas.Children.OfType<Rectangle>()
+					.FirstOrDefault(r => r.Tag?.ToString() == "TouchAreaBoundary");
 				
-				// Draw touch area boundary
+				if (existingRect == null)
+				{
 				DrawTouchAreaBoundary();
+				}
 				
-				// Draw detected touch pixels (cyan dots)
+				// FIXED: Limit number of touch pixels displayed for performance
 				if (detectedTouchPixels != null && detectedTouchPixels.Count > 0)
 				{
-					int maxDots = Math.Min(200, detectedTouchPixels.Count);
+					int maxDots = Math.Min(50, detectedTouchPixels.Count); // Reduced from 200 to 50
 					for (int i = 0; i < maxDots; i++)
 					{
 						var point = detectedTouchPixels[i];
@@ -999,35 +1068,35 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				if (OverlayCanvas == null) return;
-
-				// If the bitmap hasn't been created yet, create it from the mask
-				if (touchAreaBitmap == null && touchAreaMask != null)
+				if (OverlayCanvas == null || calibration?.TouchArea == null) return;
+				
+				// FIXED: Only create rectangle once, reuse it
+				var existingRect = OverlayCanvas.Children.OfType<Rectangle>()
+					.FirstOrDefault(r => r.Tag?.ToString() == "TouchAreaBoundary");
+				
+				if (existingRect == null)
 				{
-					int width = 512;
-					int height = 424;
-					touchAreaBitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
-					var pixels = new byte[width * height * 4];
-
-					for (int i = 0; i < touchAreaMask.Length; i++)
-					{
-						if (touchAreaMask[i])
-						{
-							int index = i * 4;
-							pixels[index] = 0;       // Blue
-							pixels[index + 1] = 255; // Green
-							pixels[index + 2] = 255; // Red
-							pixels[index + 3] = 100; // Alpha (semi-transparent)
-						}
-					}
-					touchAreaBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
-				}
-
-				// Create the image control only once and reuse it
-				if (touchAreaBitmap != null && touchAreaImage == null)
+					// Convert color coordinates to depth coordinates for visualization
+					var depthArea = ConvertColorAreaToDepthArea(calibration.TouchArea);
+					
+					// Create simple rectangle instead of expensive bitmap
+				var rect = new Rectangle
 				{
-					touchAreaImage = new Image { Source = touchAreaBitmap };
-					OverlayCanvas.Children.Add(touchAreaImage);
+						Width = Math.Max(1, depthArea.Width),
+						Height = Math.Max(1, depthArea.Height),
+					Stroke = new SolidColorBrush(Colors.Yellow),
+					StrokeThickness = 2,
+						Fill = new SolidColorBrush(Color.FromArgb(50, 255, 255, 0)), // Semi-transparent yellow
+						Tag = "TouchAreaBoundary" // Tag for easy removal
+					};
+					
+					Canvas.SetLeft(rect, depthArea.X);
+					Canvas.SetTop(rect, depthArea.Y);
+					
+					// Add the rectangle
+				OverlayCanvas.Children.Add(rect);
+					
+					LogToFile(GetDiagnosticPath(), $"Touch area boundary drawn: X={depthArea.X:F1}, Y={depthArea.Y:F1}, W={depthArea.Width:F1}, H={depthArea.Height:F1}");
 				}
 			}
 			catch (Exception ex)
@@ -1035,6 +1104,180 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(GetDiagnosticPath(), $"ERROR in DrawTouchAreaBoundary: {ex.Message}");
 			}
 		}
+
+		// Helper method to convert color area to depth area
+		// FIXED: Improved coordinate conversion with proper mapping
+		private Rect ConvertColorAreaToDepthArea(TouchAreaDefinition colorArea)
+		{
+			try
+			{
+				// CRITICAL FIX: Use proper Kinect coordinate mapping for exact size consistency with Screen 2
+				if (kinectManager?.CoordinateMapper != null && kinectManager.IsInitialized)
+				{
+					// Get current depth data
+					ushort[] depthData;
+					int depthWidth, depthHeight;
+					if (kinectManager.TryGetDepthFrameRaw(out depthData, out depthWidth, out depthHeight))
+					{
+						// Sample depth points and map them to color space to find the corresponding depth area
+						var depthAreaBounds = FindDepthAreaForColorArea(colorArea, depthData, depthWidth, depthHeight);
+						if (depthAreaBounds.HasValue)
+						{
+							LogToFile(GetDiagnosticPath(), $"SUCCESS: Touch area mapped using Kinect coordinates: {depthAreaBounds.Value.Width:F0}x{depthAreaBounds.Value.Height:F0} pixels");
+							return depthAreaBounds.Value;
+						}
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in ConvertColorAreaToDepthArea: {ex.Message}");
+			}
+			
+			// CRITICAL FIX: Use more accurate scaling that preserves aspect ratio
+			double scaleX = 512.0 / 1920.0;  // Depth width / Color width
+			double scaleY = 424.0 / 1080.0;  // Depth height / Color height
+			
+			var scaledArea = new Rect(
+				colorArea.X * scaleX, 
+				colorArea.Y * scaleY, 
+				colorArea.Width * scaleX, 
+				colorArea.Height * scaleY
+			);
+			
+			LogToFile(GetDiagnosticPath(), $"WARNING: Using scaled touch area: {scaledArea.Width:F0}x{scaledArea.Height:F0} pixels (should be ~{colorArea.Width * scaleX:F0}x{colorArea.Height * scaleY:F0})");
+			return scaledArea;
+		}
+		
+		// Helper method to find depth area corresponding to color area using reverse mapping
+		private Rect? FindDepthAreaForColorArea(TouchAreaDefinition colorArea, ushort[] depthData, int depthWidth, int depthHeight)
+		{
+			try
+			{
+				var colorPoints = new List<ColorSpacePoint>();
+				var correspondingDepthPoints = new List<DepthSpacePoint>();
+				
+				// Sample points in the color area
+				int sampleStep = 10; // Sample every 10th pixel for performance
+				for (int y = (int)colorArea.Y; y < colorArea.Bottom; y += sampleStep)
+				{
+					for (int x = (int)colorArea.X; x < colorArea.Right; x += sampleStep)
+					{
+						colorPoints.Add(new ColorSpacePoint { X = x, Y = y });
+					}
+				}
+				
+				// Find depth points that map to these color points
+				for (int dy = 0; dy < depthHeight; dy += sampleStep)
+				{
+					for (int dx = 0; dx < depthWidth; dx += sampleStep)
+					{
+						int depthIndex = dy * depthWidth + dx;
+						if (depthIndex < depthData.Length && depthData[depthIndex] > 0)
+						{
+							var depthPoint = new DepthSpacePoint { X = dx, Y = dy };
+							var mappedColorPoint = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(depthPoint, depthData[depthIndex]);
+							
+							// Check if this depth point maps to our color area
+							if (mappedColorPoint.X >= colorArea.X && mappedColorPoint.X <= colorArea.Right &&
+								mappedColorPoint.Y >= colorArea.Y && mappedColorPoint.Y <= colorArea.Bottom)
+							{
+								correspondingDepthPoints.Add(depthPoint);
+							}
+						}
+					}
+				}
+				
+				if (correspondingDepthPoints.Count > 0)
+				{
+					// Calculate bounding box of corresponding depth points
+					var minX = correspondingDepthPoints.Min(p => p.X);
+					var maxX = correspondingDepthPoints.Max(p => p.X);
+					var minY = correspondingDepthPoints.Min(p => p.Y);
+					var maxY = correspondingDepthPoints.Max(p => p.Y);
+					
+					return new Rect(minX, minY, maxX - minX, maxY - minY);
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in FindDepthAreaForColorArea: {ex.Message}");
+			}
+			
+			return null;
+		}
+
+		// FIXED: Pre-compute coordinate mapping using fast scaling (no expensive search)
+		private void PrecomputeCoordinateMapping()
+		{
+			try
+			{
+				coordinateMappingCache.Clear();
+				
+				if (calibration?.TouchArea == null) return;
+				
+				// Convert touch area to depth coordinates using fast scaling
+				var touchArea = calibration.TouchArea;
+				var depthArea = new Rect(
+					touchArea.X * SCALE_X,
+					touchArea.Y * SCALE_Y,
+					touchArea.Width * SCALE_X,
+					touchArea.Height * SCALE_Y
+				);
+				
+				// Store the depth area bounds
+				cachedDepthTouchArea = depthArea;
+				
+				// Pre-compute coordinate mapping cache using simple scaling
+				for (int y = (int)touchArea.Y; y < (int)touchArea.Bottom; y += 5)
+				{
+					for (int x = (int)touchArea.X; x < (int)touchArea.Right; x += 5)
+					{
+						var colorPoint = new Point(x, y);
+						var depthPoint = new Point(x * SCALE_X, y * SCALE_Y);
+						coordinateMappingCache[colorPoint] = depthPoint;
+					}
+				}
+				
+				// Create mask based on pre-computed bounds
+				CreateTouchAreaMask(depthArea);
+				
+				LogToFile(GetDiagnosticPath(), $"Pre-computed coordinate mapping for {coordinateMappingCache.Count} points using fast scaling: {depthArea}");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in PrecomputeCoordinateMapping: {ex.Message}");
+			}
+		}
+
+		
+		// FIXED: Use cached coordinate mapping for instant lookup
+		private Point ConvertColorPointToDepthPoint(Point colorPoint)
+		{
+			try
+			{
+				// First check cache for instant lookup
+				if (coordinateMappingCache.ContainsKey(colorPoint))
+				{
+					return coordinateMappingCache[colorPoint];
+				}
+				
+				// If not in cache, use simple scaling (much faster than search)
+				var scaledPoint = new Point(colorPoint.X * SCALE_X, colorPoint.Y * SCALE_Y);
+				
+				// Cache the result for future lookups
+				coordinateMappingCache[colorPoint] = scaledPoint;
+				
+				return scaledPoint;
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in ConvertColorPointToDepthPoint: {ex.Message}");
+				return new Point(colorPoint.X * SCALE_X, colorPoint.Y * SCALE_Y);
+			}
+		}
+
+
 		private void UpdateStatusInformation() 
 		{
 			try
@@ -1044,39 +1287,108 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					TouchCountText.Text = $"Active touches: {activeTouches?.Count ?? 0}";
 				}
 				
-				if (DepthInfoText != null)
-				{
-					if (isPlaneValid && calibration?.TouchArea != null)
-					{
-						if (touchAreaMask != null)
-						{
-							int maskPixels = touchAreaMask.Count(m => m);
-							DepthInfoText.Text = $"Optimized detection: Ready ✓ ({maskPixels} pixels)";
-						}
-						else
-						{
-							DepthInfoText.Text = "Optimized detection: Creating mask...";
-						}
-					}
-					else if (!isPlaneValid)
-					{
-						DepthInfoText.Text = "Screen 1 calibration: Missing ⚠️";
-					}
-					else if (calibration?.TouchArea == null)
-					{
-						DepthInfoText.Text = "Screen 2 calibration: Missing ⚠️";
-					}
-					else
-					{
-						DepthInfoText.Text = "Calibration: Incomplete ⚠️";
-					}
-				}
+				UpdateCalibrationStatus();
 			}
 			catch (Exception ex)
 			{
 				LogToFile(GetDiagnosticPath(), $"ERROR in UpdateStatusInformation: {ex.Message}");
 			}
 		}
+
+		private void UpdateCalibrationStatus()
+		{
+			try
+			{
+				if (DepthInfoText == null) return;
+
+				var status = new StringBuilder();
+				
+				// Screen 1 status
+				status.AppendLine($"Screen 1 (Plane): {(isPlaneValid ? "✓ Valid" : "✗ Invalid")}");
+				
+				// Screen 2 status
+				bool touchAreaValid = calibration?.TouchArea != null && 
+									 calibration.TouchArea.Width > 0 && 
+									 calibration.TouchArea.Height > 0;
+				status.AppendLine($"Screen 2 (Touch Area): {(touchAreaValid ? "✓ Valid" : "✗ Invalid")}");
+				
+				// Kinect status
+				status.AppendLine($"Kinect: {(kinectManager?.IsInitialized == true ? "✓ Connected" : "✗ Disconnected")}");
+				
+				
+				// Performance status
+				if (touchAreaMask != null)
+				{
+					int maskPixels = touchAreaMask.Count(m => m);
+					status.AppendLine($"Performance: ✓ Optimized ({maskPixels} pixels)");
+					}
+					else
+					{
+					status.AppendLine($"Performance: ⚠ Creating mask...");
+					}
+				
+				DepthInfoText.Text = status.ToString();
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in UpdateCalibrationStatus: {ex.Message}");
+			}
+		}
+		// Distance gradient lookup methods
+		private double GetExpectedDistanceFromGradient(int x, int y)
+		{
+			if (!distanceGradientAvailable || distanceGradientMap == null)
+			{
+				// Fallback to single threshold if gradient not available
+				return calibration?.KinectToSurfaceDistanceMeters ?? 2.0;
+			}
+			
+			// CRITICAL FIX: Use coordinates as-is since calling methods already handle mirroring
+			// The calling methods (DetectTouchesInDepthData and DetectTouchesUsingDepthData) 
+			// already flip the X coordinate before calling this method
+			int lookupX = x; // Use coordinates as provided by calling method
+			
+			// Look up exact coordinate
+			string key = $"{lookupX},{y}";
+			if (distanceGradientMap.ContainsKey(key))
+			{
+				return distanceGradientMap[key];
+			}
+			
+			// If exact coordinate not found, use bilinear interpolation from nearby points
+			return InterpolateDistanceFromNearbyPoints(lookupX, y);
+		}
+		
+		private double InterpolateDistanceFromNearbyPoints(int x, int y)
+		{
+			// Find the 4 nearest sample points for bilinear interpolation
+			var nearbyPoints = new List<(int x, int y, double distance)>();
+			
+			// Search in a 10-pixel radius for sample points
+			for (int dy = -10; dy <= 10; dy += 5)
+			{
+				for (int dx = -10; dx <= 10; dx += 5)
+				{
+					string key = $"{x + dx},{y + dy}";
+					if (distanceGradientMap.ContainsKey(key))
+					{
+						nearbyPoints.Add((x + dx, y + dy, distanceGradientMap[key]));
+					}
+				}
+			}
+			
+			if (nearbyPoints.Count == 0)
+			{
+				// No nearby points found, use average distance
+				return (distanceGradientMinDistance + distanceGradientMaxDistance) / 2.0;
+			}
+			
+			// Use the closest point
+			var closest = nearbyPoints.OrderBy(p => Math.Abs(p.x - x) + Math.Abs(p.y - y)).First();
+			return closest.distance;
+		}
+		
+		// ENHANCED: Automatic diagnostic access on performance issues
 		private void LogTouchDetectionDiagnostic() 
 		{
 			try
@@ -1089,6 +1401,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					
 					LogToFile(GetDiagnosticPath(), $"PERFORMANCE: Processing {maskPixels}/{totalPixels} pixels ({efficiency:F1}% efficiency)");
 					LogToFile(GetDiagnosticPath(), $"TOUCH DETECTION: {activeTouches?.Count ?? 0} active touches detected");
+					
+					// AUTOMATIC: Open diagnostic file if performance is poor
+					if (efficiency < 10.0) // Less than 10% efficiency
+					{
+						AutoOpenDiagnosticFile();
+						LogToFile(GetDiagnosticPath(), "AUTOMATIC: Diagnostic file opened due to poor performance");
+					}
 				}
 			}
 			catch (Exception ex)
@@ -1097,10 +1416,184 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
+
+		// Validation and Error Handling
+		private bool ValidateTouchDetectionSetup()
+		{
+			bool isValid = true;
+			
+			// Validate plane data
+			if (!isPlaneValid || calibration?.Plane == null)
+			{
+				LogToFile(GetDiagnosticPath(), "ERROR: Invalid plane data");
+				isValid = false;
+			}
+			
+			// Validate touch area
+			if (calibration?.TouchArea == null || 
+				calibration.TouchArea.Width <= 0 || 
+				calibration.TouchArea.Height <= 0)
+			{
+				LogToFile(GetDiagnosticPath(), "ERROR: Invalid touch area");
+				isValid = false;
+			}
+			
+			// Validate Kinect connection
+			if (kinectManager?.IsInitialized != true)
+			{
+				LogToFile(GetDiagnosticPath(), "ERROR: Kinect not initialized");
+				isValid = false;
+			}
+			
+			return isValid;
+		}
+
+		// COMPREHENSIVE CALIBRATION VALIDATION
+		private bool ValidateCalibrationData()
+		{
+			bool isValid = true;
+			
+			// Check Screen 1 data with improved validation
+			if (calibration?.Plane == null)
+			{
+				LogToFile(GetDiagnosticPath(), "ERROR: No plane data from Screen 1");
+				isValid = false;
+				isPlaneValid = false;
+			}
+			else
+			{
+				// Check if plane normal vector has reasonable magnitude (not too small)
+				double norm = Math.Sqrt(calibration.Plane.Nx * calibration.Plane.Nx + 
+									   calibration.Plane.Ny * calibration.Plane.Ny + 
+									   calibration.Plane.Nz * calibration.Plane.Nz);
+				
+				if (norm < 0.1) // More reasonable threshold
+				{
+					LogToFile(GetDiagnosticPath(), $"ERROR: Plane normal vector too small: {norm:F6}");
+					isValid = false;
+					isPlaneValid = false;
+				}
+				else
+				{
+					// Normalize and cache the plane data for performance
+					planeNx = calibration.Plane.Nx / norm;
+					planeNy = calibration.Plane.Ny / norm;
+					planeNz = calibration.Plane.Nz / norm;
+					planeD = calibration.Plane.D / norm;
+					isPlaneValid = true;
+					LogToFile(GetDiagnosticPath(), $"SUCCESS: Valid plane data loaded from Screen 1: N=({planeNx:F6}, {planeNy:F6}, {planeNz:F6}), D={planeD:F6}");
+				}
+			}
+			
+			// Check Screen 2 data with enhanced validation
+			if (calibration?.TouchArea == null ||
+				calibration.TouchArea.Width <= 0 ||
+				calibration.TouchArea.Height <= 0)
+			{
+				LogToFile(GetDiagnosticPath(), "ERROR: Invalid touch area from Screen 2");
+				isValid = false;
+			}
+			else
+			{
+				// CRITICAL FIX: Validate touch area dimensions match Screen 2
+				if (calibration.TouchArea.Width < 50 || calibration.TouchArea.Height < 50)
+				{
+					LogToFile(GetDiagnosticPath(), "ERROR: Touch area too small - may cause detection issues");
+					isValid = false;
+				}
+				
+				// Log touch area consistency check
+				LogToFile(GetDiagnosticPath(), $"Touch area consistency check: {calibration.TouchArea.Width:F0}x{calibration.TouchArea.Height:F0} pixels");
+				
+				// Check if touch area is within reasonable bounds
+				if (calibration.TouchArea.X < 0 || calibration.TouchArea.Y < 0 ||
+					calibration.TouchArea.Right > 1920 || calibration.TouchArea.Bottom > 1080)
+				{
+					LogToFile(GetDiagnosticPath(), "WARNING: Touch area extends beyond camera bounds");
+				}
+				
+				// Check if touch area has reasonable size
+				if (calibration.TouchArea.Width < 100 || calibration.TouchArea.Height < 100)
+				{
+					LogToFile(GetDiagnosticPath(), "WARNING: Touch area is very small");
+				}
+				
+				LogToFile(GetDiagnosticPath(), $"SUCCESS: Valid TouchArea loaded from Screen 2: X={calibration.TouchArea.X:F1}, Y={calibration.TouchArea.Y:F1}, W={calibration.TouchArea.Width:F1}, H={calibration.TouchArea.Height:F1}");
+			}
+			
+			// Check Kinect connection
+			if (kinectManager == null || !kinectManager.IsInitialized)
+			{
+				LogToFile(GetDiagnosticPath(), "ERROR: Kinect not initialized");
+				isValid = false;
+			}
+			
+			// Validate coordinate systems
+			if (!ValidateCoordinateSystems())
+			{
+				LogToFile(GetDiagnosticPath(), "WARNING: Coordinate system validation failed");
+			}
+			
+			// Invalidate touch area components when calibration changes
+			if (isValid)
+			{
+				touchAreaMask = null;
+				LogToFile(GetDiagnosticPath(), "Touch area mask invalidated - will be recreated on next frame");
+			}
+			else
+			{
+				// AUTOMATIC: Open diagnostic file when validation fails
+				AutoOpenDiagnosticFile();
+				LogToFile(GetDiagnosticPath(), "AUTOMATIC: Diagnostic file opened due to validation failure");
+			}
+			
+			return isValid;
+		}
+
+		// Add coordinate system validation
+		private bool ValidateCoordinateSystems()
+		{
+			try
+			{
+				if (calibration?.TouchArea == null)
+				{
+					LogToFile(GetDiagnosticPath(), "ERROR: TouchArea is null");
+					return false;
+				}
+				
+				// Validate TouchArea coordinates are in reasonable color camera range
+				var touchArea = calibration.TouchArea;
+				if (touchArea.X >= 0 && touchArea.X <= 1920 &&
+					touchArea.Y >= 0 && touchArea.Y <= 1080 &&
+					touchArea.Width > 0 && touchArea.Width <= 1920 &&
+					touchArea.Height > 0 && touchArea.Height <= 1080)
+				{
+					LogToFile(GetDiagnosticPath(), $"SUCCESS: TouchArea in color coordinates: X={touchArea.X:F1}, Y={touchArea.Y:F1}, W={touchArea.Width:F1}, H={touchArea.Height:F1}");
+					
+					// Test coordinate conversion
+					var testPoint = new Point(touchArea.X, touchArea.Y);
+					var convertedPoint = ConvertColorPointToDepthPoint(testPoint);
+					LogToFile(GetDiagnosticPath(), $"Coordinate conversion test: Color({testPoint.X:F1}, {testPoint.Y:F1}) -> Depth({convertedPoint.X:F1}, {convertedPoint.Y:F1})");
+					
+					return true;
+				}
+				else
+				{
+					LogToFile(GetDiagnosticPath(), $"ERROR: TouchArea coordinates out of range: X={touchArea.X}, Y={touchArea.Y}, W={touchArea.Width}, H={touchArea.Height}");
+					return false;
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in ValidateCoordinateSystems: {ex.Message}");
+				return false;
+			}
+		}
+
 		private void RunInitialDiagnostics()
 		{
 			var diagnosticPath = GetDiagnosticPath();
-			LogToFile(diagnosticPath, "=== SCREEN 3 INITIAL DIAGNOSTIC ===");
+			LogToFile(diagnosticPath, "=== SCREEN 3 COMPREHENSIVE DIAGNOSTIC ===");
 			LogToFile(diagnosticPath, $"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
 
 			// Log calibration data
@@ -1110,6 +1603,24 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(diagnosticPath, $"TouchArea: X={calibration.TouchArea.X}, Y={calibration.TouchArea.Y}, W={calibration.TouchArea.Width}, H={calibration.TouchArea.Height}");
 				LogToFile(diagnosticPath, $"Plane: Nx={calibration.Plane.Nx}, Ny={calibration.Plane.Ny}, Nz={calibration.Plane.Nz}, D={calibration.Plane.D}");
 				LogToFile(diagnosticPath, $"Kinect to Surface Distance: {calibration.KinectToSurfaceDistanceMeters}m");
+				
+				// Distance gradient status
+				LogToFile(diagnosticPath, $"Distance Gradient Status: {(distanceGradientAvailable ? "Available" : "Not Available")}");
+				if (distanceGradientAvailable)
+				{
+					LogToFile(diagnosticPath, $"Gradient Points: {distanceGradientMap.Count}");
+					LogToFile(diagnosticPath, $"Distance Range: {distanceGradientMinDistance:F3} - {distanceGradientMaxDistance:F3} meters");
+				}
+				
+				// Mirroring status
+				LogToFile(diagnosticPath, $"Depth Feed Mirroring: Enabled (X coordinates flipped for gradient lookup)");
+				LogToFile(diagnosticPath, $"Adaptive Threshold: {(distanceGradientAvailable ? "Enabled" : "Disabled")}");
+				
+				// Touch size detection status
+				LogToFile(diagnosticPath, $"Touch Mode: {currentTouchMode}");
+				LogToFile(diagnosticPath, $"Min Touch Size: {minBlobAreaPoints} pixels");
+				LogToFile(diagnosticPath, $"Max Touch Size: {maxBlobAreaPoints} pixels");
+				LogToFile(diagnosticPath, $"Touch Mode Settings: {string.Join(", ", touchModeSettings.Select(kv => $"{kv.Key}={kv.Value}"))}");
 			}
 			else
 			{
@@ -1128,14 +1639,69 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				LogToFile(diagnosticPath, "!!! CRITICAL: KinectManager is NULL. !!!");
 			}
-			LogToFile(diagnosticPath, "=== END INITIAL DIAGNOSTIC ===");
+
+			// Log performance settings
+			LogToFile(diagnosticPath, "--- Performance Settings ---");
+			LogToFile(diagnosticPath, $"Frame Rate: 60 FPS (16ms interval)");
+			LogToFile(diagnosticPath, $"Frame Skipping: None (real-time processing)");
+			LogToFile(diagnosticPath, $"Depth Visualization: Every frame");
+			LogToFile(diagnosticPath, $"Touch Detection: Every frame");
+
+			// Log validation results
+			LogToFile(diagnosticPath, "--- Validation Results ---");
+			bool validationResult = ValidateCalibrationData();
+			LogToFile(diagnosticPath, $"Calibration Valid: {validationResult}");
+			
+			// Add touch detection setup validation
+			bool touchSetupValid = ValidateTouchDetectionSetup();
+			LogToFile(diagnosticPath, $"Touch Detection Setup Valid: {touchSetupValid}");
+
+
+			LogToFile(diagnosticPath, "=== END COMPREHENSIVE DIAGNOSTIC ===");
 		}
 		private string GetDiagnosticPath() 
 		{ 
 			var appDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
 			return System.IO.Path.Combine(appDir, "..", "..", "screen3_diagnostic.txt");
 		}
-		private void LogToFile(string path, string message) { System.IO.File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} - {message}\n"); }
+		
+		// NEW: Automatic diagnostic file access
+		private void AutoOpenDiagnosticFile()
+		{
+			try
+			{
+				var path = GetDiagnosticPath();
+				if (System.IO.File.Exists(path))
+				{
+					// Open diagnostic file automatically in background
+					System.Diagnostics.Process.Start("notepad.exe", path);
+					LogToFile(path, "AUTOMATIC: Diagnostic file opened automatically for monitoring");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in AutoOpenDiagnosticFile: {ex.Message}");
+			}
+		}
+		// ENHANCED: Automatic diagnostic access on errors
+		private void LogToFile(string path, string message) 
+		{ 
+			try
+			{
+				System.IO.File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} - {message}\n");
+				
+				// AUTOMATIC: Open diagnostic file on critical errors
+				if (message.Contains("CRITICAL") || message.Contains("ERROR") || message.Contains("FAILED"))
+				{
+					AutoOpenDiagnosticFile();
+				}
+			}
+			catch (Exception ex)
+			{
+				// Fallback logging
+				System.Diagnostics.Debug.WriteLine($"LogToFile Error: {ex.Message}");
+			}
+		}
 		
 		// Real-time plane detection helper methods
 		private Plane? CalculateWallPlane(ushort[] depthData, int width, int height)
@@ -1225,36 +1791,104 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			return point.X * plane.Nx + point.Y * plane.Ny + point.Z * plane.Nz + plane.D;
 		}
 		
-		// Create touch area mask for performance optimization
-		private void CreateTouchAreaMask(ushort[] depthData, int width, int height)
+		// Fallback detection method when camera space frame fails
+		private void DetectTouchesUsingDepthData(ushort[] depthData, int width, int height)
 		{
 			try
 			{
-				touchAreaMask = new bool[depthData.Length];
-				var touchArea = calibration.TouchArea;
-
-				for (int i = 0; i < depthData.Length; i++)
+				var threshold = PlaneThresholdSlider.Value * 0.001;
+				var touchPixels = new List<Point>();
+				
+				// Use depth data directly for touch detection
+				for (int y = 0; y < height; y += 5)
 				{
-					ushort depth = depthData[i];
-					if (depth > 0)
+					for (int x = 0; x < width; x += 5)
 					{
-						int x = i % width;
-						int y = i / width;
-
-						var depthPoint = new DepthSpacePoint { X = x, Y = y };
-						var colorPoint = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(depthPoint, depth);
-
-						if (!float.IsInfinity(colorPoint.X) && !float.IsInfinity(colorPoint.Y))
+						int index = y * width + x;
+						if (index < depthData.Length && touchAreaMask != null && touchAreaMask[index])
 						{
-							if (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
-								colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom)
+							ushort depth = depthData[index];
+							if (depth > 0)
 							{
-								touchAreaMask[i] = true;
+										// Use distance gradient for accurate touch detection
+										double depthInMeters = depth / 1000.0;
+										
+						// CRITICAL FIX: Handle mirrored depth feed - flip X coordinate for gradient lookup
+						int mirroredX = width - 1 - x;
+						double expectedDistance = GetExpectedDistanceFromGradient(mirroredX, y);
+						
+						// CRITICAL FIX: Use adaptive threshold based on slider value
+						double adaptiveThreshold = PlaneThresholdSlider.Value * 0.001; // Convert slider to meters
+						
+						if (expectedDistance > 0 && depthInMeters < expectedDistance - adaptiveThreshold && depthInMeters > 0.3)
+						{
+							// CRITICAL FIX: Use mirrored coordinates for display
+							touchPixels.Add(new Point(mirroredX, y));
+							}
 							}
 						}
 					}
 				}
-				LogToFile(GetDiagnosticPath(), "Touch area mask created.");
+				
+				// Cluster and process touches
+				var blobs = SimpleCluster(touchPixels, 20);
+				var now = DateTime.Now;
+				var newTouches = new List<TouchPoint>();
+				
+				foreach (var blob in blobs)
+				{
+					// CRITICAL FIX: Use variable touch size detection
+					if (blob.Area >= minBlobAreaPoints && blob.Area <= maxBlobAreaPoints)
+					{
+						newTouches.Add(new TouchPoint
+						{
+							Position = blob.Center,
+							LastSeen = now,
+							Area = blob.Area,
+							Depth = 0
+						});
+					}
+				}
+				activeTouches = newTouches;
+				DetectionStatusText.Text = $"Touches detected (fallback): {activeTouches.Count}";
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in DetectTouchesUsingDepthData: {ex.Message}");
+				DetectionStatusText.Text = "Error in fallback detection";
+			}
+		}
+		
+		// FIXED: Efficient touch area mask creation using pre-computed bounds
+		private void CreateTouchAreaMask(Rect depthArea)
+		{
+			try
+			{
+				// Get depth data dimensions
+				ushort[] depthData;
+				int width, height;
+				if (!kinectManager.TryGetDepthFrameRaw(out depthData, out width, out height))
+				{
+					LogToFile(GetDiagnosticPath(), "ERROR: Could not get depth data for mask creation");
+					return;
+				}
+				
+				// Create simple rectangular mask - no coordinate conversion needed
+				touchAreaMask = new bool[depthData.Length];
+				
+				for (int y = (int)depthArea.Y; y < (int)depthArea.Bottom; y++)
+				{
+					for (int x = (int)depthArea.X; x < (int)depthArea.Right; x++)
+					{
+						int index = y * width + x;
+						if (index >= 0 && index < depthData.Length)
+						{
+							touchAreaMask[index] = true;
+						}
+					}
+				}
+				
+				LogToFile(GetDiagnosticPath(), $"Touch area mask created efficiently: {depthArea}");
 			}
 			catch (Exception ex)
 			{

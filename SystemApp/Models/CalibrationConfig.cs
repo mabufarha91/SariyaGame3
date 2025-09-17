@@ -73,6 +73,18 @@ namespace KinectCalibrationWPF.Models
 		// Screen 3 Touch Detection Settings
 		[DataMember]
 		public Dictionary<string, object> TouchDetectionSettings { get; set; } // Additional touch detection parameters
+		
+		// Distance Gradient for Angle Problem Solution
+		[DataMember]
+		public Dictionary<string, double> DistanceGradientMap { get; set; } // Sparse distance map: "x,y" -> distance
+		[DataMember]
+		public int DistanceGradientSamplingRate { get; set; } // How often we sample (e.g., every 5th pixel)
+		[DataMember]
+		public double DistanceGradientMinDistance { get; set; } // Minimum distance in the touch area
+		[DataMember]
+		public double DistanceGradientMaxDistance { get; set; } // Maximum distance in the touch area
+		[DataMember]
+		public double DistanceGradientAverageDistance { get; set; } // Average distance across touch area
 
 		public CalibrationConfig()
 		{
@@ -111,6 +123,13 @@ namespace KinectCalibrationWPF.Models
 			AverageMarkerSizePixels = 0.0;
 			CalibrationAccuracyScore = 0.0;
 			TouchDetectionSettings = new Dictionary<string, object>();
+			
+			// Initialize distance gradient properties
+			DistanceGradientMap = new Dictionary<string, double>();
+			DistanceGradientSamplingRate = 5; // Sample every 5th pixel
+			DistanceGradientMinDistance = 0.0;
+			DistanceGradientMaxDistance = 0.0;
+			DistanceGradientAverageDistance = 0.0;
 		}
 
 		private static double[] CreateIdentity4x4As1D()
