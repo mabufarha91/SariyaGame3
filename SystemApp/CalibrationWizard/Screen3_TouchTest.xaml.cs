@@ -229,9 +229,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				if (PlaneThresholdSlider != null)
 				{
-					PlaneThresholdSlider.Minimum = 5;    // 5mm minimum  
-					PlaneThresholdSlider.Maximum = 500;  // 500mm maximum (50cm)
-					PlaneThresholdSlider.Value = 200;    // 200mm default (20cm - good for hands)
+					PlaneThresholdSlider.Minimum = 10;    // 10mm minimum (more restrictive)
+					PlaneThresholdSlider.Maximum = 300;   // 300mm maximum (30cm - reasonable for hands)
+					PlaneThresholdSlider.Value = 100;     // 100mm default (10cm - good balance)
 					UpdateThresholdDisplay();
 					
 					LogToFile(GetDiagnosticPath(), $"Threshold slider: {PlaneThresholdSlider.Value}mm (range: {PlaneThresholdSlider.Minimum}-{PlaneThresholdSlider.Maximum}mm)");
@@ -588,9 +588,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				negativeDistances = 0; // CRITICAL FIX: Reset counter each frame
 				
 				// KEEP existing sampling but add debugging
-				for (int y = (int)searchArea.Y; y < (int)searchArea.Bottom; y += 5)
+				for (int y = (int)searchArea.Y; y < (int)searchArea.Bottom; y += 8)  // Changed from 5 to 8
 				{
-					for (int x = (int)searchArea.X; x < (int)searchArea.Right; x += 5)
+					for (int x = (int)searchArea.X; x < (int)searchArea.Right; x += 8)  // Changed from 5 to 8
 					{
 						pixelsChecked++;
 						int index = y * width + x;
@@ -638,9 +638,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							}
 									
 							// CRITICAL FIX: Detect objects that are closer than wall (even at 1m distance)
-							if (distanceFromWall < -0.005 &&           // Must be closer than wall (at least 5mm)
-								distanceFromWall > -0.500 &&           // But not ridiculously close (max 50cm from wall)
-								depthInMeters > 0.5 && depthInMeters < 3.5) // Reasonable depth range
+							if (distanceFromWall < -0.010 &&                    // Must be at least 10mm closer than wall (noise filter)
+								distanceFromWall > -threshold &&                // Use SLIDER value, not hardcoded!
+								depthInMeters > 0.5 && depthInMeters < 3.5 &&  // Reasonable depth range
+								Math.Abs(distanceFromWall) < 0.200)             // Extra filter: not more than 20cm from wall
 									{
 										touchPixels.Add(new Point(mirroredX, y));
 										detectedPixels++;
@@ -1899,9 +1900,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 									negativeDistances++;
 									
 								// CRITICAL FIX: Detect objects closer than wall (negative distance)
-								if (distanceFromWall < -0.005 && 
-									distanceFromWall > -0.500 &&           // Changed from -threshold to -0.500
-									depthInMeters > 0.3)
+								if (distanceFromWall < -0.010 && 
+									distanceFromWall > -threshold &&                // Use SLIDER value, not hardcoded!
+									depthInMeters > 0.3 &&
+									Math.Abs(distanceFromWall) < 0.200)            // Extra noise filter
 									{
 										touchPixels.Add(new Point(mirroredX, y));
 									}
