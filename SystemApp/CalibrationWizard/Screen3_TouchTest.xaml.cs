@@ -632,16 +632,16 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 							bool isTouch = false;
 
+							// 1) Gradient-based test (kept)
 							if (distanceGradientAvailable && expectedDistance > 0)
 							{
 								gradientLookups++;
-								double distanceFromWall = expectedDistance - depthInMeters;
+								double distanceFromWall = expectedDistance - depthInMeters; // positive means closer than wall
 								if (gradientLookups <= 5)
 								{
 									LogToFile(GetDiagnosticPath(),
 										$"SAMPLE {gradientLookups}: Expected={expectedDistance:F3}m, Actual={depthInMeters:F3}m, DistanceFromWall={distanceFromWall:F3}m, Threshold={threshold:F3}m");
 								}
-								if (distanceFromWall > 0) closerPixels++;
 								if (distanceFromWall > 0.010 && distanceFromWall < threshold &&
 									depthInMeters > 0.3 && depthInMeters < 4.0)
 								{
@@ -649,19 +649,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 								}
 							}
 
-							// Plane-along-ray fallback (robust to gradient errors)
+							// 2) Plane-along-ray test (robust when gradient is off)
 							if (!isTouch)
 							{
-								double expectedAlong = ExpectedDistanceToPlaneAlongRay(csp);
-								if (!double.IsNaN(expectedAlong))
+								double tExpected = ExpectedDistanceToPlaneAlongRay(csp);              // expected range to wall along ray
+								if (!double.IsNaN(tExpected))
 								{
-									double actualAlong = Math.Sqrt(csp.X * csp.X + csp.Y * csp.Y + csp.Z * csp.Z);
-									double deltaRay = expectedAlong - actualAlong;
+									double tActual = Math.Sqrt(csp.X * csp.X + csp.Y * csp.Y + csp.Z * csp.Z); // measured range for this pixel
+									double delta = tExpected - tActual; // positive => closer than wall
 									if (gradientLookups <= 5)
 									{
-										LogToFile(GetDiagnosticPath(), $"ALONG-RAY: Expected={expectedAlong:F3}m, Actual={actualAlong:F3}m, Delta={deltaRay:F3}m");
+										LogToFile(GetDiagnosticPath(), $"ALONG-RAY: Expected={tExpected:F3}m, Actual={tActual:F3}m, Delta={delta:F3}m");
 									}
-									if (deltaRay > 0.010 && deltaRay < (threshold * 1.5) && depthInMeters > 0.3 && depthInMeters < 4.0)
+									if (delta > 0) closerPixels++;
+									if (delta > 0.010 && delta < (threshold * 1.5) && depthInMeters > 0.3 && depthInMeters < 4.0)
 									{
 										isTouch = true;
 									}
@@ -1149,17 +1150,21 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				if (existingRect == null)
 				{
-					// Prefer real mapping via current depth frame; fallback to proportional mapping
+					var scaled = ConvertColorAreaToDepthArea(calibration.TouchArea);
 					Rect depthArea;
 					ushort[] dd; int dw, dh;
 					if (kinectManager.TryGetDepthFrameRaw(out dd, out dw, out dh))
 					{
 						var mapped = FindDepthAreaForColorArea(calibration.TouchArea, dd, dw, dh);
-						depthArea = mapped ?? ConvertColorAreaToDepthArea(calibration.TouchArea);
+						// accept mapped only if not drastically smaller (<70%) than scaled
+						if (mapped.HasValue && mapped.Value.Width >= 0.7 * scaled.Width && mapped.Value.Height >= 0.7 * scaled.Height)
+							depthArea = mapped.Value;
+						else
+							depthArea = scaled;
 					}
 					else
 					{
-						depthArea = ConvertColorAreaToDepthArea(calibration.TouchArea);
+						depthArea = scaled;
 					}
 
 					var rect = new Rectangle
@@ -1246,9 +1251,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			double dx = p.X / len, dy = p.Y / len, dz = p.Z / len;
 			double denom = planeNx * dx + planeNy * dy + planeNz * dz;
 			if (Math.Abs(denom) < 1e-6) return double.NaN;
-			double t = -planeD / denom; // intersection distance along ray
-			if (t <= 0) return double.NaN;
-			return t;
+			double t = -planeD / denom; // distance from camera origin along the pixel ray to the wall plane
+			return (t > 0) ? t : double.NaN;
 		}
 
 		// Helper method to find depth area corresponding to color area using reverse mapping
