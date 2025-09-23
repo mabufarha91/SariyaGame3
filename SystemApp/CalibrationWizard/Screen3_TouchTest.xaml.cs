@@ -34,6 +34,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private const double SCALE_X = 512.0 / 1920.0;  // 0.267
 		private const double SCALE_Y = 424.0 / 1080.0;  // 0.393
 		
+		// Limit: ignore anything more than this much closer than wall (meters)
+		private const double MaxTouchOffsetM = 0.025;
+		
 		
 		// TOUCH AREA MASK for performance optimization
 		private bool[] touchAreaMask = null;
@@ -54,7 +57,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private static int gradientLookupCounter = 0;
 		private int negativeDistances = 0; // Track how many objects are closer than expected
 		
-		
+		// Simple detection mode and heatmap
+		private bool useSimpleDetection = true;   // Simple plane-based mode (default ON)
+		private bool showHeatmap = false;         // Toggleable heatmap overlay
+		private WriteableBitmap heatmapBitmap;    // Reused heatmap buffer
 		
 		private class TouchPoint
 		{
@@ -63,6 +69,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			public double Depth { get; set; }
 			public Rectangle VisualElement { get; set; }
 			public int Area { get; set; }
+			public int SeenCount { get; set; } // frames observed
 		}
 
 		private class Blob { public Point Center; public int Area; }
@@ -211,6 +218,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				// Initialize sliders after UI is fully loaded
 				InitializeSliders();
+				
+				// Call this after loading calibration data
+				NormalizeAndOrientPlane();
 				
 				// Run initial diagnostics
 				RunInitialDiagnostics();
@@ -388,11 +398,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							intensity = (byte)(255 * (1.0 - normalized));
 						}
 						
-							// Proper grayscale mapping (BGR format)
-							pixels[i * 4] = intensity;     // Blue
-							pixels[i * 4 + 1] = intensity; // Green
-							pixels[i * 4 + 2] = intensity; // Red
-							pixels[i * 4 + 3] = 255;       // Alpha
+						// Proper grayscale mapping (BGR format)
+						pixels[i * 4] = intensity;     // Blue
+						pixels[i * 4 + 1] = intensity; // Green
+						pixels[i * 4 + 2] = intensity; // Red
+						pixels[i * 4 + 3] = 255;       // Alpha
 					}
 				}
 				
@@ -488,7 +498,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				var currentTime = DateTime.Now;
 				var removedCount = activeTouches.RemoveAll(touch => 
 				{
-					bool shouldRemove = (currentTime - touch.LastSeen).TotalMilliseconds > 300; // was 100
+					bool shouldRemove = (currentTime - touch.LastSeen).TotalMilliseconds > 180; // reduce TTL for responsiveness
 					
 					if (shouldRemove && touch.VisualElement != null)
 					{
@@ -543,7 +553,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				{
 					StatusText.Text = "Wall plane is not valid. Please recalibrate from Screen 1.";
 					DetectionStatusText.Text = "Wall plane not calibrated";
-						return;
+					return;
 				}
 
 				if (calibration?.TouchArea == null || 
@@ -556,10 +566,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 				
 				// KEEP existing sophisticated threshold logic but add debugging
-				var threshold = PlaneThresholdSlider.Value * 0.001; // Convert to meters
+				var thresholdSliderM = PlaneThresholdSlider.Value * 0.001; // UI in mm → meters
+				var threshold = Math.Max(0.030, Math.Min(0.080, thresholdSliderM)); // force 30–80 mm window for reliability
 				var touchPixels = new List<Point>();
-				
-				LogToFile(GetDiagnosticPath(), $"DETECTION START: Using threshold {threshold*1000:F1}mm, gradient available: {distanceGradientAvailable}");
+
+				LogToFile(GetDiagnosticPath(), $"DETECTION START: Using threshold {threshold*1000:F1}mm (effective), gradient available: {distanceGradientAvailable}");
 
 				// Get camera space points
 				CameraSpacePoint[] cameraSpacePoints;
@@ -589,6 +600,19 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Expand a bit to avoid edge misses due to mapping approximations
 				var searchArea = InflateRect(cachedDepthTouchArea, 12, 12, width, height);
 				
+				LogToFile(GetDiagnosticPath(), $"DETECTION MODE CHECK: useSimpleDetection={useSimpleDetection}, checkbox={UseSimpleDetectionCheckBox?.IsChecked}");
+				
+				// Use Simple mode by default and update heatmap each frame
+				// Simple plane-based mode: robust to gradient errors
+				if (useSimpleDetection)
+				{
+					DetectTouchesSimple(depthData, cameraSpacePoints, width, height, searchArea, threshold);
+					UpdateHeatmap(searchArea, cameraSpacePoints, width, height, threshold);
+					DetectionStatusText.Text = $"Touches (simple): {activeTouches.Count} ({threshold*1000:F0}mm)";
+					StatusText.Text = $"Detection active (simple)";
+					return;
+				}
+				
 				// DEBUGGING: Track detection statistics
 				int pixelsChecked = 0;
 				int validCameraPoints = 0;
@@ -607,11 +631,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						
 						if (index >= 0 && index < cameraSpacePoints.Length)
 						{
-							CameraSpacePoint csp = cameraSpacePoints[index];
-							if (float.IsInfinity(csp.X) || float.IsInfinity(csp.Y) || float.IsInfinity(csp.Z))
+							// Depth-rect gate first to eliminate obvious out-of-bounds
+							if (x < (int)searchArea.X || x >= (int)searchArea.Right || y < (int)searchArea.Y || y >= (int)searchArea.Bottom)
 								continue;
 
-							// Map this depth pixel to color-space for gradient lookup and area check
+							CameraSpacePoint csp = cameraSpacePoints[index];
+						if (float.IsInfinity(csp.X) || float.IsInfinity(csp.Y) || float.IsInfinity(csp.Z))
+							continue;
+
+							// Map to color-space for Screen 2 area inclusion
 							ushort depthVal = depthData[index];
 							var colorPt = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(
 								new DepthSpacePoint { X = x, Y = y }, depthVal);
@@ -621,7 +649,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							int cy = (int)Math.Round(colorPt.Y);
 							if (cx < 0 || cy < 0 || cx >= 1920 || cy >= 1080) continue;
 
-							// Enforce inclusion by Screen 2 color-space touch area
 							var ta = calibration.TouchArea;
 							if (cx < ta.Left || cx > ta.Right || cy < ta.Top || cy > ta.Bottom) continue;
 
@@ -632,40 +659,36 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 							bool isTouch = false;
 
-							// 1) Gradient-based test (kept)
+							// Gradient (kept) with max closeness cap
 							if (distanceGradientAvailable && expectedDistance > 0)
 							{
 								gradientLookups++;
-								double distanceFromWall = expectedDistance - depthInMeters; // positive means closer than wall
+								double distanceFromWall = expectedDistance - depthInMeters; // positive => closer than wall
 								if (gradientLookups <= 5)
 								{
 									LogToFile(GetDiagnosticPath(),
 										$"SAMPLE {gradientLookups}: Expected={expectedDistance:F3}m, Actual={depthInMeters:F3}m, DistanceFromWall={distanceFromWall:F3}m, Threshold={threshold:F3}m");
 								}
-								if (distanceFromWall > 0.010 && distanceFromWall < threshold &&
+								if (distanceFromWall > 0.010 && distanceFromWall < Math.Min(threshold, MaxTouchOffsetM) &&
 									depthInMeters > 0.3 && depthInMeters < 4.0)
-								{
 									isTouch = true;
-								}
 							}
 
-							// 2) Plane-along-ray test (robust when gradient is off)
+							// Plane-along-ray (robust), also capped
 							if (!isTouch)
 							{
-								double tExpected = ExpectedDistanceToPlaneAlongRay(csp);              // expected range to wall along ray
+								double tExpected = ExpectedDistanceToPlaneAlongRay(csp);
 								if (!double.IsNaN(tExpected))
 								{
-									double tActual = Math.Sqrt(csp.X * csp.X + csp.Y * csp.Y + csp.Z * csp.Z); // measured range for this pixel
-									double delta = tExpected - tActual; // positive => closer than wall
+									double tActual = Math.Sqrt(csp.X * csp.X + csp.Y * csp.Y + csp.Z * csp.Z);
+									double deltaRay = tExpected - tActual; // positive => closer than wall
 									if (gradientLookups <= 5)
 									{
-										LogToFile(GetDiagnosticPath(), $"ALONG-RAY: Expected={tExpected:F3}m, Actual={tActual:F3}m, Delta={delta:F3}m");
+										LogToFile(GetDiagnosticPath(), $"ALONG-RAY: Expected={tExpected:F3}m, Actual={tActual:F3}m, Delta={deltaRay:F3}m");
 									}
-									if (delta > 0) closerPixels++;
-									if (delta > 0.010 && delta < (threshold * 1.5) && depthInMeters > 0.3 && depthInMeters < 4.0)
-									{
+									if (deltaRay > 0.010 && deltaRay < Math.Min(threshold * 1.5, MaxTouchOffsetM) &&
+										depthInMeters > 0.3 && depthInMeters < 4.0)
 										isTouch = true;
-									}
 								}
 							}
 
@@ -719,6 +742,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						existingTouch.Position = newTouch.Position;
 						existingTouch.LastSeen = now;
 						existingTouch.Area = newTouch.Area;
+						existingTouch.SeenCount = Math.Min(existingTouch.SeenCount + 1, 10);
 						updatedTouches.Add(existingTouch);
 						
 						LogToFile(GetDiagnosticPath(), $"Updated existing touch at ({newTouch.Position.X:F1}, {newTouch.Position.Y:F1})");
@@ -727,6 +751,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					{
 						// Add completely new touch
 						newTouch.LastSeen = now;
+						newTouch.SeenCount = 1;
 						updatedTouches.Add(newTouch);
 						
 						LogToFile(GetDiagnosticPath(), $"Added new touch at ({newTouch.Position.X:F1}, {newTouch.Position.Y:F1})");
@@ -780,8 +805,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			if (!float.IsInfinity(colorPoint.X) && !float.IsInfinity(colorPoint.Y))
 			{
 				var touchArea = calibration.TouchArea;
-					return (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
-							colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom);
+				return (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
+						colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom);
 				}
 			}
 			catch (Exception ex)
@@ -860,7 +885,29 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		
+		private void MinBlobAreaSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		{
+			try
+			{
+				minBlobAreaPoints = (int)e.NewValue;
+
+				// Clamp to reduce pepper noise; better swipe stability
+				if (minBlobAreaPoints < 80) minBlobAreaPoints = 80;
+				if (MinBlobAreaSlider.Value < 80) MinBlobAreaSlider.Value = 80;
+
+				if (touchModeSettings.ContainsKey(currentTouchMode))
+				{
+					touchModeSettings[currentTouchMode] = minBlobAreaPoints;
+				}
+
+				UpdateTouchSizeDisplay();
+				LogToFile(GetDiagnosticPath(), $"Min blob area changed to: {minBlobAreaPoints} ({currentTouchMode} mode)");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in MinBlobAreaSlider_ValueChanged: {ex.Message}");
+			}
+		}
 		
 		
 		private void ResetViewButton_Click(object sender, RoutedEventArgs e)
@@ -892,27 +939,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		private void MinBlobAreaSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-		{
-			try
-			{
-				minBlobAreaPoints = (int)e.NewValue;
-				
-				// Update touch mode settings when slider changes
-				if (touchModeSettings.ContainsKey(currentTouchMode))
-				{
-					touchModeSettings[currentTouchMode] = minBlobAreaPoints;
-				}
-				
-				UpdateTouchSizeDisplay();
-				LogToFile(GetDiagnosticPath(), $"Min blob area changed to: {minBlobAreaPoints} ({currentTouchMode} mode)");
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in MinBlobAreaSlider_ValueChanged: {ex.Message}");
-			}
-		}
-		
 		
 		// Touch mode selection for different interaction types
 		private void UpdateTouchMode(string mode)
@@ -934,8 +960,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		
 		private void UpdateTouchSizeDisplay()
 		{
-			if (MinBlobAreaValueText != null)
-			{
+				if (MinBlobAreaValueText != null)
+				{
 				MinBlobAreaValueText.Text = $"{minBlobAreaPoints} pts ({currentTouchMode})";
 			}
 		}
@@ -964,6 +990,43 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
+		private void DetectionMode_Changed(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				if (UseSimpleDetectionCheckBox != null)
+				{
+					useSimpleDetection = UseSimpleDetectionCheckBox.IsChecked == true;
+					LogToFile(GetDiagnosticPath(), $"Detection mode changed: {(useSimpleDetection ? "Simple" : "Advanced")}");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in DetectionMode_Changed: {ex.Message}");
+			}
+		}
+
+		private void Heatmap_Changed(object sender, RoutedEventArgs e)
+		{
+			try
+			{
+				if (ShowHeatmapCheckBox != null)
+				{
+					showHeatmap = ShowHeatmapCheckBox.IsChecked == true;
+					LogToFile(GetDiagnosticPath(), $"Heatmap display changed: {(showHeatmap ? "ON" : "OFF")}");
+					
+					// Clear heatmap when disabled
+					if (!showHeatmap && HeatmapImage != null)
+					{
+						HeatmapImage.Source = null;
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in Heatmap_Changed: {ex.Message}");
+			}
+		}
 
 		private void FinishButton_Click(object sender, RoutedEventArgs e)
 		{
@@ -1035,45 +1098,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
-		private void NormalizeAndOrientPlane() 
-		{
-			try
-			{
-				if (calibration?.Plane != null)
-				{
-					// Normalize plane normal vector
-					double norm = Math.Sqrt(calibration.Plane.Nx * calibration.Plane.Nx + 
-										   calibration.Plane.Ny * calibration.Plane.Ny + 
-										   calibration.Plane.Nz * calibration.Plane.Nz);
-					
-					if (norm > 0.001)
-					{
-						planeNx = calibration.Plane.Nx / norm;
-						planeNy = calibration.Plane.Ny / norm;
-						planeNz = calibration.Plane.Nz / norm;
-						planeD = calibration.Plane.D / norm;
-						isPlaneValid = true;
-						
-						LogToFile(GetDiagnosticPath(), $"Plane normalized: N=({planeNx:F6}, {planeNy:F6}, {planeNz:F6}), D={planeD:F6}");
-				}
-				else
-				{
-						isPlaneValid = false;
-						LogToFile(GetDiagnosticPath(), "ERROR: Plane normal vector has zero magnitude");
-					}
-				}
-				else
-				{
-					isPlaneValid = false;
-					LogToFile(GetDiagnosticPath(), "ERROR: No plane data available for normalization");
-				}
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in NormalizeAndOrientPlane: {ex.Message}");
-				isPlaneValid = false;
-			}
-		}
 		private void UpdateThresholdDisplay()
 		{
 			try
@@ -1108,8 +1132,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 				
 				// Add visual elements for current active touches
-					foreach (var touch in activeTouches)
-					{
+				foreach (var touch in activeTouches)
+				{
+					// Require at least 2 frames before rendering (de-jitter)
+					if (touch.SeenCount < 2) continue;
+
 					var rect = new Rectangle
 						{
 							Width = 20,
@@ -1119,14 +1146,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						StrokeThickness = 2,
 						Tag = "TouchVisual"
 					};
-					
+
 					Canvas.SetLeft(rect, touch.Position.X - 10);
 					Canvas.SetTop(rect, touch.Position.Y - 10);
-					
 					OverlayCanvas.Children.Add(rect);
-					
-					// Store reference for cleanup
-					touch.VisualElement = rect;
 				}
 				
 				// Draw touch area boundary (keep existing logic)
@@ -1255,6 +1278,226 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			return (t > 0) ? t : double.NaN;
 		}
 
+		private void NormalizeAndOrientPlane() 
+		{
+			try
+			{
+				if (calibration?.Plane != null)
+				{
+					// Normalize plane normal vector
+					double norm = Math.Sqrt(calibration.Plane.Nx * calibration.Plane.Nx + 
+										   calibration.Plane.Ny * calibration.Plane.Ny + 
+										   calibration.Plane.Nz * calibration.Plane.Nz);
+					
+					if (norm > 0.001)
+					{
+						planeNx = calibration.Plane.Nx / norm;
+						planeNy = calibration.Plane.Ny / norm;
+						planeNz = calibration.Plane.Nz / norm;
+						planeD = calibration.Plane.D / norm;
+
+						// Ensure the plane normal points toward the camera to make along-ray distances positive and stable
+						try
+						{
+							if (calibration.TouchAreaCorners3D != null && calibration.TouchAreaCorners3D.Count >= 4)
+							{
+								// Use the touch area center as a point on the wall
+								var cx = calibration.TouchAreaCorners3D.Average(p => p.X);
+								var cy = calibration.TouchAreaCorners3D.Average(p => p.Y);
+								var cz = calibration.TouchAreaCorners3D.Average(p => p.Z);
+								// Vector from wall toward camera origin (0,0,0)
+								double vx = -cx, vy = -cy, vz = -cz;
+								double dot = planeNx * vx + planeNy * vy + planeNz * vz;
+								if (dot < 0)
+								{
+									// Flip orientation
+									planeNx = -planeNx; planeNy = -planeNy; planeNz = -planeNz; planeD = -planeD;
+								}
+							}
+							else
+							{
+								// Fallback: prefer camera to be on the positive side of the plane
+								// If camera origin (0,0,0) evaluates negative, flip.
+								if (planeD < 0) { planeNx = -planeNx; planeNy = -planeNy; planeNz = -planeNz; planeD = -planeD; }
+							}
+						}
+						catch { }
+
+						isPlaneValid = true;
+						LogToFile(GetDiagnosticPath(), $"Plane normalized & oriented: N=({planeNx:F6}, {planeNy:F6}, {planeNz:F6}), D={planeD:F6}");
+					}
+					else
+					{
+						isPlaneValid = false;
+						LogToFile(GetDiagnosticPath(), "ERROR: Plane normal vector has zero magnitude");
+					}
+				}
+				else
+				{
+					isPlaneValid = false;
+					LogToFile(GetDiagnosticPath(), "ERROR: No plane data available for normalization");
+				}
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in NormalizeAndOrientPlane: {ex.Message}");
+				isPlaneValid = false;
+			}
+		}
+
+		// REPLACE DetectTouchesSimple with this capture‑free, plane‑only detector
+		private void DetectTouchesSimple(ushort[] depthData, CameraSpacePoint[] csp, int width, int height, Rect searchArea, double thresholdM)
+		{
+			// Effective sensitivity and caps (no slider surprise)
+			thresholdM = Math.Max(0.030, Math.Min(0.080, thresholdM));
+			double minM = 0.010;                                     // >10 mm nearer than wall
+			double maxM = Math.Min(thresholdM * 1.5, MaxTouchOffsetM); // ≤25 mm cap
+
+			var touchPixels = new List<Point>();
+			int ay = Math.Max(0, (int)searchArea.Y);
+			int by = Math.Min(height, (int)searchArea.Bottom);
+			int ax = Math.Max(0, (int)searchArea.X);
+			int bx = Math.Min(width, (int)searchArea.Right);
+
+			int checkedPx = 0, detected = 0, samplesLogged = 0;
+
+			for (int y = ay; y < by; y += 4)
+			{
+				int row = y * width;
+				for (int x = ax; x < bx; x += 4)
+				{
+					int idx = row + x;
+					checkedPx++;
+					
+					ushort dv = depthData[idx];
+					if (dv < 500 || dv > 4500) continue; // ignore invalid/out-of-range depth
+
+					var p = csp[idx];
+					if (float.IsInfinity(p.X) || float.IsInfinity(p.Y) || float.IsInfinity(p.Z)) continue;
+
+					// Signed plane distance in meters (plane already normalized/oriented toward camera)
+					double d0 = planeNx * p.X + planeNy * p.Y + planeNz * p.Z + planeD;
+
+					// Log first few samples for visibility
+					if (samplesLogged < 5)
+					{
+						LogToFile(GetDiagnosticPath(), $"PLANE DISTANCE: Point=({p.X:F3}, {p.Y:F3}, {p.Z:F3}), Distance={d0:F3}m, Min={minM:F3}m, Max={maxM:F3}m");
+						samplesLogged++;
+					}
+
+					// Neighbor consistency (3x3 in steps of 4px) – zero latency, suppresses speckle
+					int agree = 0, tot = 0;
+					for (int dy = -4; dy <= 4; dy += 4)
+					{
+						int yy = y + dy; if (yy < ay || yy >= by) continue;
+						int baseRow = yy * width;
+						for (int dx = -4; dx <= 4; dx += 4)
+						{
+							int xx = x + dx; if (xx < ax || xx >= bx) continue;
+							int ii = baseRow + xx;
+							ushort dvn = depthData[ii];
+							if (dvn < 500 || dvn > 4500) continue;
+							var pn = csp[ii];
+							if (float.IsInfinity(pn.X) || float.IsInfinity(pn.Y) || float.IsInfinity(pn.Z)) continue;
+							double dn = planeNx * pn.X + planeNy * pn.Y + planeNz * pn.Z + planeD;
+							tot++;
+							if (dn > (minM * 0.7)) agree++;
+						}
+					}
+
+					if (d0 > minM && d0 < maxM && agree >= 4 && tot >= 6)
+					{
+						touchPixels.Add(new Point(x, y));
+						detected++;
+					}
+				}
+			}
+
+			LogToFile(GetDiagnosticPath(), $"DETECTION STATS (simple): Checked={checkedPx}, DetectedPx={detected}, Thr={thresholdM*1000:F0}mm");
+
+			var blobs = SimpleCluster(touchPixels, 20);
+			var now = DateTime.Now;
+			var newTouches = new List<TouchPoint>();
+			foreach (var b in blobs)
+				if (b.Area >= minBlobAreaPoints && b.Area <= maxBlobAreaPoints)
+					newTouches.Add(new TouchPoint { Position = b.Center, LastSeen = now, Area = b.Area, Depth = 0, SeenCount = 1 });
+
+			// keep your existing tracking/SeenCount/TTL code here...
+			var updated = new List<TouchPoint>();
+			foreach (var nt in newTouches)
+			{
+				var ex = activeTouches.FirstOrDefault(t => Math.Abs(t.Position.X - nt.Position.X) < 30 && Math.Abs(t.Position.Y - nt.Position.Y) < 30);
+				if (ex != null)
+				{
+					ex.Position = nt.Position; ex.LastSeen = now; ex.Area = nt.Area; ex.SeenCount = Math.Min(ex.SeenCount + 1, 10);
+					updated.Add(ex);
+				}
+				else
+				{
+					nt.LastSeen = now; nt.SeenCount = 1;
+					updated.Add(nt);
+				}
+			}
+			foreach (var ex in activeTouches)
+				if (!updated.Any(t => Math.Abs(t.Position.X - ex.Position.X) < 30 && Math.Abs(t.Position.Y - ex.Position.Y) < 30))
+					updated.Add(ex);
+
+			activeTouches = updated;
+		}
+
+		private void UpdateHeatmap(Rect area, CameraSpacePoint[] csp, int width, int height, double thresholdM)
+		{
+			try
+			{
+				if (!showHeatmap) return;
+				if (heatmapBitmap == null)
+					heatmapBitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+
+				var pixels = new byte[width * height * 4];
+
+				int ay = Math.Max(0, (int)area.Y);
+				int by = Math.Min(height, (int)area.Bottom);
+				int ax = Math.Max(0, (int)area.X);
+				int bx = Math.Min(width, (int)area.Right);
+
+				for (int y = ay; y < by; y += 2)
+				{
+					int row = y * width;
+					for (int x = ax; x < bx; x += 2)
+					{
+						int i = row + x;
+						var p = csp[i];
+						if (float.IsInfinity(p.X) || float.IsInfinity(p.Y) || float.IsInfinity(p.Z)) continue;
+
+						double tExp = ExpectedDistanceToPlaneAlongRay(p);
+						if (double.IsNaN(tExp)) continue;
+
+						double tAct = Math.Sqrt(p.X * p.X + p.Y * p.Y + p.Z * p.Z);
+						double delta = (tExp - tAct); // meters; positive => closer than wall
+
+						// Map -50..+50 mm to colors (blue→gray→red)
+						double mm = Math.Max(-0.05, Math.Min(0.05, delta));
+						double t = (mm + 0.05) / 0.10; // 0..1
+						byte r = (byte)(Math.Min(1.0, Math.Max(0.0, 2*t - 1)) * 255);
+						byte b = (byte)(Math.Min(1.0, Math.Max(0.0, 1 - 2*t)) * 255);
+						byte g = (byte)(Math.Min(r, b)); // simple desaturation
+						byte a = (byte)128;
+
+						int idx = i * 4;
+						pixels[idx + 0] = b;
+						pixels[idx + 1] = g;
+						pixels[idx + 2] = r;
+						pixels[idx + 3] = a;
+					}
+				}
+
+				heatmapBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+				// Ensure an Image named HeatmapImage exists above DepthImage in XAML (see below)
+				if (HeatmapImage != null) HeatmapImage.Source = heatmapBitmap;
+			}
+			catch { }
+		}
+
 		// Helper method to find depth area corresponding to color area using reverse mapping
 		private Rect? FindDepthAreaForColorArea(TouchAreaDefinition colorArea, ushort[] depthData, int depthWidth, int depthHeight)
 		{
@@ -1277,11 +1520,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				for (int dy = 0; dy < depthHeight; dy += sampleStep)
 				{
 					for (int dx = 0; dx < depthWidth; dx += sampleStep)
-							{
-								int depthIndex = dy * depthWidth + dx;
-								if (depthIndex < depthData.Length && depthData[depthIndex] > 0)
-								{
-									var depthPoint = new DepthSpacePoint { X = dx, Y = dy };
+									{
+										int depthIndex = dy * depthWidth + dx;
+										if (depthIndex < depthData.Length && depthData[depthIndex] > 0)
+										{
+											var depthPoint = new DepthSpacePoint { X = dx, Y = dy };
 							var mappedColorPoint = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(depthPoint, depthData[depthIndex]);
 							
 							// Check if this depth point maps to our color area
@@ -1766,7 +2009,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			LogToFile(diagnosticPath, "--- Validation Results ---");
 			bool validationResult = ValidateCalibrationData();
 			LogToFile(diagnosticPath, $"Calibration Valid: {validationResult}");
-			
+
 			// Add touch detection setup validation
 			bool touchSetupValid = ValidateTouchDetectionSetup();
 			LogToFile(diagnosticPath, $"Touch Detection Setup Valid: {touchSetupValid}");
@@ -1932,8 +2175,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						{
 							checkedPixels++;
 							ushort depth = depthData[index];
-							if (depth > 0)
-							{
+					if (depth > 0)
+					{
 								double depthInMeters = depth / 1000.0;
 
 								// Map depth -> color for gradient and area check

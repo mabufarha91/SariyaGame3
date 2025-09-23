@@ -63,6 +63,7 @@
 									</TransformGroup>
 								</Grid.RenderTransform>
 								<Image x:Name="DepthImage" Stretch="Fill"/>
+								<Image x:Name="HeatmapImage" Stretch="Fill"/>
 								<Canvas x:Name="OverlayCanvas" Background="Transparent"/>
 							</Grid>
 						</Viewbox>
@@ -108,6 +109,8 @@
 							<GroupBox Header="Camera View" Margin="0,0,0,15">
 								<StackPanel Margin="10">
 									<CheckBox x:Name="FlipDepthVerticallyCheckBox" IsChecked="True" Content="Flip depth vertically" Checked="FlipDepthVerticallyCheckBox_Changed" Unchecked="FlipDepthVerticallyCheckBox_Changed"/>
+									<CheckBox x:Name="UseSimpleDetectionCheckBox" IsChecked="True" Content="Use simple (plane) detection" Checked="DetectionMode_Changed" Unchecked="DetectionMode_Changed" Margin="0,8,0,0"/>
+									<CheckBox x:Name="ShowHeatmapCheckBox" IsChecked="False" Content="Show distance heatmap" Checked="Heatmap_Changed" Unchecked="Heatmap_Changed" Margin="0,4,0,0"/>
 								</StackPanel>
 							</GroupBox>
 							
