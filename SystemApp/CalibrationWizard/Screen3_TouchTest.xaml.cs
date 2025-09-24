@@ -602,16 +602,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				LogToFile(GetDiagnosticPath(), $"DETECTION MODE CHECK: useSimpleDetection={useSimpleDetection}, checkbox={UseSimpleDetectionCheckBox?.IsChecked}");
 				
-				// Use Simple mode by default and update heatmap each frame
-				// Simple plane-based mode: robust to gradient errors
-				if (useSimpleDetection)
-				{
-					DetectTouchesSimple(depthData, cameraSpacePoints, width, height, searchArea, threshold);
-					UpdateHeatmap(searchArea, cameraSpacePoints, width, height, threshold);
-					DetectionStatusText.Text = $"Touches (simple): {activeTouches.Count} ({threshold*1000:F0}mm)";
-					StatusText.Text = $"Detection active (simple)";
-					return;
-				}
+				// ALWAYS use simple plane-based mode (the correct algorithm)
+				DetectTouchesSimple(depthData, cameraSpacePoints, width, height, searchArea, threshold);
+				UpdateHeatmap(searchArea, cameraSpacePoints, width, height, threshold);
+				DetectionStatusText.Text = $"Touches (simple): {activeTouches.Count} ({threshold*1000:F0}mm)";
+				StatusText.Text = $"Detection active (simple)";
+				return;
 				
 				// DEBUGGING: Track detection statistics
 				int pixelsChecked = 0;
