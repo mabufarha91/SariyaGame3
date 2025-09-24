@@ -58,7 +58,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private int negativeDistances = 0; // Track how many objects are closer than expected
 		
 		// Simple detection mode and heatmap
-		private bool useSimpleDetection = true;   // Simple plane-based mode (default ON)
+		private bool useSimpleDetection = false;  // Simple detector OFF by default
 		private bool showHeatmap = false;         // Toggleable heatmap overlay
 		private WriteableBitmap heatmapBitmap;    // Reused heatmap buffer
 		
