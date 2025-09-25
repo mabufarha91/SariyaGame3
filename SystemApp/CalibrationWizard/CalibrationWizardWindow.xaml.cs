@@ -571,6 +571,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			planeNormal = n;
 			planeDistance = -(n.X * camPts[0].X + n.Y * camPts[0].Y + n.Z * camPts[0].Z);
 
+			// ADD THIS LINE: Call debugging method for plane calculation
+			var plane = new PlaneDefinition { Nx = n.X, Ny = n.Y, Nz = n.Z, D = planeDistance };
+			DebugPlaneCalculation(plane, camPts);
+
+			// ADD THIS LINE: Call debugging method for corner points
+			DebugTouchAreaCorners(camPts);
+
 			// Persist finalized corners
 			finalCameraCorners = camPts;
 			calibrationConfig.CornerPointsCamera.Clear();
@@ -934,6 +941,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					LogToFile(diagnosticPath, $"CornerPointsNormalized count: {calibrationConfig.CornerPointsNormalized?.Count ?? 0}");
 					LogToFile(diagnosticPath, $"CornerPointsCamera count: {calibrationConfig.CornerPointsCamera?.Count ?? 0}");
 					
+					// ADD THIS LINE: Call debugging method
+					DebugCalibrationSave();
+					
 					// Try to save
 					CalibrationStorage.Save(calibrationConfig);
 					LogToFile(diagnosticPath, "Calibration saved successfully!");
@@ -1011,6 +1021,66 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			
 			LogToFile(diagnosticPath, "");
+		}
+
+		// DEBUGGING: Strategic breakpoint targets for Screen 1
+		private void DebugPlaneCalculation(PlaneDefinition plane, List<CameraSpacePoint> points)
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect plane calculation
+			var planeData = new { Nx = plane.Nx, Ny = plane.Ny, Nz = plane.Nz, D = plane.D };
+			var pointCount = points.Count;
+			var normalMagnitude = Math.Sqrt(plane.Nx * plane.Nx + plane.Ny * plane.Ny + plane.Nz * plane.Nz);
+			
+			// Test plane with first point
+			var testDistance = points.Count > 0 ? plane.Nx * points[0].X + plane.Ny * points[0].Y + plane.Nz * points[0].Z + plane.D : 0;
+			
+			System.Diagnostics.Debug.WriteLine($"PLANE CALC: Normal={planeData}, Points={pointCount}, Magnitude={normalMagnitude:F6}, TestDist={testDistance:F6}m");
+		}
+
+		private void DebugTouchAreaCorners(List<CameraSpacePoint> corners)
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect corner points
+			var cornerCount = corners.Count;
+			var centerX = corners.Average(c => c.X);
+			var centerY = corners.Average(c => c.Y);
+			var centerZ = corners.Average(c => c.Z);
+			
+			System.Diagnostics.Debug.WriteLine($"CORNERS: Count={cornerCount}, Center=({centerX:F3}, {centerY:F3}, {centerZ:F3})");
+		}
+
+		private void DebugCalibrationSave()
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect what gets saved
+			var planeData = new { Nx = calibrationConfig.Plane.Nx, Ny = calibrationConfig.Plane.Ny, Nz = calibrationConfig.Plane.Nz, D = calibrationConfig.Plane.D };
+			var cornerCount = calibrationConfig.TouchAreaCorners3D?.Count ?? 0;
+			var distance = calibrationConfig.KinectToSurfaceDistanceMeters;
+			
+			System.Diagnostics.Debug.WriteLine($"SAVING: Plane={planeData}, Corners={cornerCount}, Distance={distance:F3}m");
+		}
+
+		// DEBUGGING: Real-time monitoring helper
+		private void LogRealTimeDebug(string location, object data = null)
+		{
+			try
+			{
+				var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+				var message = $"[{timestamp}] {location}";
+				
+				if (data != null)
+				{
+					message += $" - {data}";
+				}
+				
+				// Output to debug console for live monitoring
+				System.Diagnostics.Debug.WriteLine(message);
+				
+				// Also log to file for persistent record
+				LogToFile(GetScreen1DiagnosticPath(), message);
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"LogRealTimeDebug Error: {ex.Message}");
+			}
 		}
 	}
 }

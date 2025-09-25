@@ -2333,8 +2333,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					calibrationConfig.ArUcoMarkerIds.Add(kvp.Key);
 				}
 				
+				// ADD THIS LINE: Call debugging method
+				DebugTouchAreaSelection(touchAreaDef);
+				
 				// Save to system calibration file
 				CalibrationStorage.Save(calibrationConfig);
+				
+				// ADD THIS LINE: Call debugging method
+				DebugTouchAreaSave();
 				
 				if (logPath != null) 
 				{
@@ -3223,6 +3229,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 				
 				if (logPath != null) LogToFile(logPath, "Distance gradient calculation completed successfully");
+				
+				// ADD THIS LINE: Call debugging method
+				DebugDistanceGradient(cfg.DistanceGradientMap);
 			}
 			catch (Exception ex)
 			{
@@ -3254,6 +3263,75 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			double finalDistance = topDistance + (bottomDistance - topDistance) * normalizedY;
 			
 			return finalDistance;
+		}
+
+		// DEBUGGING: Strategic breakpoint targets for Screen 2
+		private void DebugTouchAreaSelection(TouchAreaDefinition touchArea)
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect touch area selection
+			var area = new { X = touchArea.X, Y = touchArea.Y, Width = touchArea.Width, Height = touchArea.Height };
+			var centerX = touchArea.X + touchArea.Width / 2;
+			var centerY = touchArea.Y + touchArea.Height / 2;
+			var areaPixels = touchArea.Width * touchArea.Height;
+			var coveragePercent = (areaPixels / (1920.0 * 1080.0)) * 100;
+			
+			System.Diagnostics.Debug.WriteLine($"TOUCH AREA: {area}, Center=({centerX:F1}, {centerY:F1}), Pixels={areaPixels}, Coverage={coveragePercent:F1}%");
+		}
+
+		private void DebugDistanceGradient(Dictionary<string, double> gradientMap)
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect distance gradient
+			var pointCount = gradientMap.Count;
+			var distances = gradientMap.Values.ToList();
+			var minDist = distances.Min();
+			var maxDist = distances.Max();
+			var avgDist = distances.Average();
+			var variation = maxDist - minDist;
+			
+			System.Diagnostics.Debug.WriteLine($"GRADIENT: Points={pointCount}, Range={minDist:F3}m to {maxDist:F3}m, Avg={avgDist:F3}m, Variation={variation:F3}m");
+		}
+
+		private void DebugTouchAreaSave()
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect what gets saved
+			var touchArea = new { X = calibrationConfig.TouchArea.X, Y = calibrationConfig.TouchArea.Y, Width = calibrationConfig.TouchArea.Width, Height = calibrationConfig.TouchArea.Height };
+			var gradientCount = calibrationConfig.DistanceGradientMap?.Count ?? 0;
+			var gradientRange = new { Min = calibrationConfig.DistanceGradientMinDistance, Max = calibrationConfig.DistanceGradientMaxDistance };
+			
+			System.Diagnostics.Debug.WriteLine($"SAVING TOUCH AREA: Area={touchArea}, Gradient={gradientCount} points, Range={gradientRange}");
+		}
+
+		// DEBUGGING: Real-time monitoring helper
+		private void LogRealTimeDebug(string location, object data = null)
+		{
+			try
+			{
+				var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+				var message = $"[{timestamp}] {location}";
+				
+				if (data != null)
+				{
+					message += $" - {data}";
+				}
+				
+				// Output to debug console for live monitoring
+				System.Diagnostics.Debug.WriteLine(message);
+				
+				// Also log to file for persistent record
+				var diagnosticPath = GetDiagnosticPath();
+				LogToFile(diagnosticPath, message);
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"LogRealTimeDebug Error: {ex.Message}");
+			}
+		}
+
+		private string GetDiagnosticPath()
+		{
+			var appDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+			var root = System.IO.Path.GetFullPath(System.IO.Path.Combine(appDir, "..", "..", ".."));
+			return System.IO.Path.Combine(root, "diag", "screen2_diagnostic.txt");
 		}
 	}
 	

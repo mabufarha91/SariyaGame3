@@ -187,6 +187,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				InitializeUnifiedViewTransform();
 				NormalizeAndOrientPlane();
 				
+				// ADD THIS LINE: Call debugging method
+				DebugCalibrationLoad();
+				
 				LogToFile(GetDiagnosticPath(), "Screen 3 initialized successfully");
 			}
 			catch (Exception ex)
@@ -1168,6 +1171,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					if (samplesLogged < 5)
 					{
 						LogToFile(GetDiagnosticPath(), $"PLANE DISTANCE: Point=({p.X:F3}, {p.Y:F3}, {p.Z:F3}), Distance={d0:F3}m, Min={minM:F3}m, Max={maxM:F3}m");
+						// ADD THIS LINE: Call debugging method
+						DebugPlaneDistance(p, d0);
 						samplesLogged++;
 					}
 
@@ -1201,6 +1206,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 			LogToFile(GetDiagnosticPath(), $"DETECTION STATS (simple): Checked={checkedPx}, DetectedPx={detected}, Thr={thresholdM*1000:F0}mm");
 
+			// ADD THIS LINE: Call debugging method
+			DebugTouchDetection(checkedPx, detected, touchPixels, activeTouches);
+
 			var blobs = SimpleCluster(touchPixels, 20);
 			var now = DateTime.Now;
 			var newTouches = new List<TouchPoint>();
@@ -1227,6 +1235,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			foreach (var ex in activeTouches)
 				if (!updated.Any(t => Math.Abs(t.Position.X - ex.Position.X) < 30 && Math.Abs(t.Position.Y - ex.Position.Y) < 30))
 					updated.Add(ex);
+
+			// ADD THIS LINE: Call debugging method
+			DebugTouchTracking(newTouches, updated);
 
 			activeTouches = updated;
 		}
@@ -2255,6 +2266,102 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					evals[p] = b[p];
 					z[p] = 0.0;
 				}
+			}
+		}
+
+		// DEBUGGING: Strategic breakpoint targets for Screen 3
+		private void DebugCalibrationLoad()
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect loaded calibration data
+			var planeValid = isPlaneValid;
+			var planeData = new { Nx = planeNx, Ny = planeNy, Nz = planeNz, D = planeD };
+			var touchArea = calibration?.TouchArea != null ? new { X = calibration.TouchArea.X, Y = calibration.TouchArea.Y, Width = calibration.TouchArea.Width, Height = calibration.TouchArea.Height } : null;
+			var gradientAvailable = distanceGradientAvailable;
+			var gradientCount = distanceGradientMap?.Count ?? 0;
+			
+			System.Diagnostics.Debug.WriteLine($"LOADED DATA: PlaneValid={planeValid}, Plane={planeData}, TouchArea={touchArea}, Gradient={gradientAvailable} ({gradientCount} points)");
+		}
+
+		private void DebugTouchDetection(int checkedPixels, int detectedPixels, List<Point> touchPixels, List<TouchPoint> activeTouches)
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect touch detection
+			var detectionRate = checkedPixels > 0 ? (double)detectedPixels / checkedPixels * 100 : 0;
+			var touchPixelCount = touchPixels.Count;
+			var activeTouchCount = activeTouches.Count;
+			var threshold = PlaneThresholdSlider?.Value ?? 0;
+			
+			System.Diagnostics.Debug.WriteLine($"DETECTION: Checked={checkedPixels}, Detected={detectedPixels} ({detectionRate:F1}%), TouchPixels={touchPixelCount}, ActiveTouches={activeTouchCount}, Threshold={threshold}mm");
+		}
+
+		private void DebugPlaneDistance(CameraSpacePoint point, double planeDistance)
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect plane distance calculations
+			var point3D = new { X = point.X, Y = point.Y, Z = point.Z };
+			var distance = planeDistance;
+			var threshold = PlaneThresholdSlider?.Value * 0.001 ?? 0;
+			var isTouch = distance > 0.010 && distance < threshold;
+			
+			System.Diagnostics.Debug.WriteLine($"PLANE DIST: Point={point3D}, Distance={distance:F3}m, Threshold={threshold:F3}m, IsTouch={isTouch}");
+		}
+
+		private void DebugTouchTracking(List<TouchPoint> newTouches, List<TouchPoint> updatedTouches)
+		{
+			// BREAKPOINT TARGET: Set breakpoint here to inspect touch tracking
+			var newCount = newTouches.Count;
+			var updatedCount = updatedTouches.Count;
+			var totalActive = activeTouches.Count;
+			
+			System.Diagnostics.Debug.WriteLine($"TRACKING: New={newCount}, Updated={updatedCount}, TotalActive={totalActive}");
+		}
+
+		// DEBUGGING: Conditional breakpoint helpers
+		private void DebugIfNoDetection()
+		{
+			// BREAKPOINT TARGET: Set conditional breakpoint here (when activeTouches.Count == 0)
+			if (activeTouches.Count == 0)
+			{
+				var planeValid = isPlaneValid;
+				var threshold = PlaneThresholdSlider?.Value ?? 0;
+				var searchArea = cachedDepthTouchArea;
+				
+				System.Diagnostics.Debug.WriteLine($"NO DETECTION: PlaneValid={planeValid}, Threshold={threshold}mm, SearchArea={searchArea}");
+			}
+		}
+
+		private void DebugIfFalsePositives()
+		{
+			// BREAKPOINT TARGET: Set conditional breakpoint here (when activeTouches.Count > 5)
+			if (activeTouches.Count > 5)
+			{
+				var touchCount = activeTouches.Count;
+				var threshold = PlaneThresholdSlider?.Value ?? 0;
+				
+				System.Diagnostics.Debug.WriteLine($"FALSE POSITIVES: TouchCount={touchCount}, Threshold={threshold}mm");
+			}
+		}
+
+		// DEBUGGING: Real-time monitoring helper
+		private void LogRealTimeDebug(string location, object data = null)
+		{
+			try
+			{
+				var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+				var message = $"[{timestamp}] {location}";
+				
+				if (data != null)
+				{
+					message += $" - {data}";
+				}
+				
+				// Output to debug console for live monitoring
+				System.Diagnostics.Debug.WriteLine(message);
+				
+				// Also log to file for persistent record
+				LogToFile(GetDiagnosticPath(), message);
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"LogRealTimeDebug Error: {ex.Message}");
 			}
 		}
 	}
