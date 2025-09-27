@@ -190,6 +190,16 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// ADD THIS LINE: Call debugging method
 				DebugCalibrationLoad();
 				
+				// Add TouchAreaDefinition debugging
+				if (calibration?.TouchArea != null)
+				{
+					LogToFile(GetDiagnosticPath(), $"ORIGINAL TOUCH AREA: X={calibration.TouchArea.X:F1}, Y={calibration.TouchArea.Y:F1}, W={calibration.TouchArea.Width:F1}, H={calibration.TouchArea.Height:F1}");
+				}
+				else
+				{
+					LogToFile(GetDiagnosticPath(), "ERROR: TouchArea is NULL - this will cause search area problems!");
+				}
+				
 				LogToFile(GetDiagnosticPath(), "Screen 3 initialized successfully");
 			}
 			catch (Exception ex)
@@ -1007,6 +1017,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
+				// Add debugging for input
+				LogToFile(GetDiagnosticPath(), $"CONVERT INPUT: ColorArea=({colorArea.X:F1}, {colorArea.Y:F1}, {colorArea.Width:F1}, {colorArea.Height:F1})");
+				
 				// FIX: Don't scale down the area - keep it the same relative size
 				// Map the touch area to cover a reasonable portion of the depth frame
 				
@@ -1035,6 +1048,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				y = Math.Min(y, depthHeight - depthHeight_mapped);
 				
 				var mappedArea = new Rect(x, y, depthWidth_mapped, depthHeight_mapped);
+				
+				// Add debugging for output
+				LogToFile(GetDiagnosticPath(), $"CONVERT OUTPUT: DepthArea=({mappedArea.X:F1}, {mappedArea.Y:F1}, {mappedArea.Width:F1}, {mappedArea.Height:F1})");
 				
 				LogToFile(GetDiagnosticPath(), $"FIXED MAPPING: Color {colorArea.Width:F0}x{colorArea.Height:F0} -> Depth {mappedArea.Width:F0}x{mappedArea.Height:F0} at ({mappedArea.X:F1}, {mappedArea.Y:F1})");
 				return mappedArea;
@@ -1151,15 +1167,23 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			// Add debug logging for search area and bounds
 			LogToFile(GetDiagnosticPath(), $"SEARCH AREA DEBUG: searchArea=({searchArea.X:F1}, {searchArea.Y:F1}, {searchArea.Width:F1}, {searchArea.Height:F1})");
 			LogToFile(GetDiagnosticPath(), $"BOUNDS CALC: ay={ay}, by={by}, ax={ax}, bx={bx}");
+			LogToFile(GetDiagnosticPath(), $"DEPTH FRAME SIZE: {width}x{height}");
+			LogToFile(GetDiagnosticPath(), $"SEARCH AREA VALID: {(searchArea.Width > 0 && searchArea.Height > 0 ? "YES" : "NO")}");
 			LogToFile(GetDiagnosticPath(), $"LOOP RANGES: y={ay} to {by-1} (step 4), x={ax} to {bx-1} (step 4)");
 
 			int checkedPx = 0, detected = 0, samplesLogged = 0;
 
 			for (int y = ay; y < by; y += 4)
 			{
+				// Add loop entry debugging
+				if (y == ay) LogToFile(GetDiagnosticPath(), $"ENTERING Y LOOP: y={y}, by={by}, step=4, total_iterations={(by-ay)/4}");
+				
 				int row = y * width;
 				for (int x = ax; x < bx; x += 4)
 				{
+					// Add first iteration debugging
+					if (y == ay && x == ax) LogToFile(GetDiagnosticPath(), $"ENTERING X LOOP: x={x}, bx={bx}, step=4, total_iterations={(bx-ax)/4}");
+					
 					int idx = row + x;
 					checkedPx++;
 					
@@ -1169,20 +1193,22 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					var p = csp[idx];
 					if (float.IsInfinity(p.X) || float.IsInfinity(p.Y) || float.IsInfinity(p.Z)) continue;
 
-					// Signed plane distance in meters (plane already normalized/oriented toward camera)
-					double d0 = planeNx * p.X + planeNy * p.Y + planeNz * p.Z + planeD;
+					// Calculate the signed distance from the point to the plane
+					double signedDistance = planeNx * p.X + planeNy * p.Y + planeNz * p.Z + planeD;
+
+					// CORE FIX: Use absolute distance to eliminate orientation dependency
+					double absoluteDistance = Math.Abs(signedDistance);
 
 					// Log first few samples for visibility
 					if (samplesLogged < 5)
 					{
-						LogToFile(GetDiagnosticPath(), $"PLANE DISTANCE: Point=({p.X:F3}, {p.Y:F3}, {p.Z:F3}), Distance={d0:F3}m, Min={minM:F3}m, Max={maxM:F3}m");
-						// ADD THIS LINE: Call debugging method
-						DebugPlaneDistance(p, d0);
+						LogToFile(GetDiagnosticPath(), $"PLANE DISTANCE: Point=({p.X:F3}, {p.Y:F3}, {p.Z:F3}), AbsoluteDist={absoluteDistance:F3}m, Min={minM:F3}m, Max={maxM:F3}m");
+						DebugPlaneDistance(p, absoluteDistance);
 						samplesLogged++;
 					}
 
 					// Simple distance check - no neighbor validation
-					if (d0 > minM && d0 < maxM)
+					if (absoluteDistance > minM && absoluteDistance < maxM)
 					{
 						touchPixels.Add(new Point(x, y));
 						detected++;
