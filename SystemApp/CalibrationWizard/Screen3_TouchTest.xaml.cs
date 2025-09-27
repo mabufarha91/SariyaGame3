@@ -200,6 +200,21 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					LogToFile(GetDiagnosticPath(), "ERROR: TouchArea is NULL - this will cause search area problems!");
 				}
 				
+				// Initialize cachedDepthTouchArea immediately instead of waiting for first depth frame
+				if (calibration?.TouchArea != null)
+				{
+					// Calculate the depth area immediately
+					var touchArea = calibration.TouchArea;
+					var depthArea = ConvertColorAreaToDepthArea(touchArea);
+					cachedDepthTouchArea = depthArea;
+
+					LogToFile(GetDiagnosticPath(), $"INITIALIZED TOUCH AREA CACHE: X={cachedDepthTouchArea.X:F1}, Y={cachedDepthTouchArea.Y:F1}, W={cachedDepthTouchArea.Width:F1}, H={cachedDepthTouchArea.Height:F1}");
+				}
+				else
+				{
+					LogToFile(GetDiagnosticPath(), "ERROR: Cannot initialize touch area cache - calibration.TouchArea is null");
+				}
+				
 				LogToFile(GetDiagnosticPath(), "Screen 3 initialized successfully");
 			}
 			catch (Exception ex)
