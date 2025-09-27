@@ -401,11 +401,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							intensity = (byte)(255 * (1.0 - normalized));
 						}
 						
-						// Proper grayscale mapping (BGR format)
-						pixels[i * 4] = intensity;     // Blue
-						pixels[i * 4 + 1] = intensity; // Green
-						pixels[i * 4 + 2] = intensity; // Red
-						pixels[i * 4 + 3] = 255;       // Alpha
+							// Proper grayscale mapping (BGR format)
+							pixels[i * 4] = intensity;     // Blue
+							pixels[i * 4 + 1] = intensity; // Green
+							pixels[i * 4 + 2] = intensity; // Red
+							pixels[i * 4 + 3] = 255;       // Alpha
 					}
 				}
 				
@@ -550,21 +550,21 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
 			// Keep all initial validation checks
-			if (!isPlaneValid || calibration?.TouchArea == null)
-			{
+				if (!isPlaneValid || calibration?.TouchArea == null)
+				{
 				LogToFile(GetDiagnosticPath(), "WARNING: Invalid plane or touch area");
-				return;
-			}
+						return;
+				}
 
-			// Get camera space points
-			CameraSpacePoint[] cameraSpacePoints;
-			int depthWidth, depthHeight;
-			if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out depthWidth, out depthHeight))
-			{
+				// Get camera space points
+				CameraSpacePoint[] cameraSpacePoints;
+				int depthWidth, depthHeight;
+				if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out depthWidth, out depthHeight))
+				{
 				LogToFile(GetDiagnosticPath(), "WARNING: Camera space frame failed, using fallback");
 				DetectTouchesUsingDepthData(depthData, width, height);
-				return;
-			}
+					return;
+				}
 
 			// Get threshold and search area
 			var thresholdSliderM = PlaneThresholdSlider.Value * 0.001;
@@ -594,8 +594,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			if (!float.IsInfinity(colorPoint.X) && !float.IsInfinity(colorPoint.Y))
 			{
 				var touchArea = calibration.TouchArea;
-				return (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
-						colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom);
+					return (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
+							colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom);
 				}
 			}
 			catch (Exception ex)
@@ -979,12 +979,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						depthArea = scaled;
 					}
 
-					var rect = new Rectangle
-					{
+				var rect = new Rectangle
+				{
 						Width = Math.Max(1, depthArea.Width),
 						Height = Math.Max(1, depthArea.Height),
-						Stroke = new SolidColorBrush(Colors.Yellow),
-						StrokeThickness = 2,
+					Stroke = new SolidColorBrush(Colors.Yellow),
+					StrokeThickness = 2,
 						Fill = new SolidColorBrush(Color.FromArgb(50, 255, 255, 0)),
 						Tag = "TouchAreaBoundary"
 					};
@@ -992,7 +992,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					Canvas.SetLeft(rect, depthArea.X);
 					Canvas.SetTop(rect, depthArea.Y);
 					
-					OverlayCanvas.Children.Add(rect);
+				OverlayCanvas.Children.Add(rect);
 					
 					LogToFile(GetDiagnosticPath(), $"Touch area boundary drawn: X={depthArea.X:F1}, Y={depthArea.Y:F1}, W={depthArea.Width:F1}, H={depthArea.Height:F1}");
 				}
@@ -1317,11 +1317,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				for (int dy = 0; dy < depthHeight; dy += sampleStep)
 				{
 					for (int dx = 0; dx < depthWidth; dx += sampleStep)
-									{
-										int depthIndex = dy * depthWidth + dx;
-										if (depthIndex < depthData.Length && depthData[depthIndex] > 0)
-										{
-											var depthPoint = new DepthSpacePoint { X = dx, Y = dy };
+							{
+								int depthIndex = dy * depthWidth + dx;
+								if (depthIndex < depthData.Length && depthData[depthIndex] > 0)
+								{
+									var depthPoint = new DepthSpacePoint { X = dx, Y = dy };
 							var mappedColorPoint = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(depthPoint, depthData[depthIndex]);
 							
 							// Check if this depth point maps to our color area
@@ -1806,7 +1806,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			LogToFile(diagnosticPath, "--- Validation Results ---");
 			bool validationResult = ValidateCalibrationData();
 			LogToFile(diagnosticPath, $"Calibration Valid: {validationResult}");
-
+			
 			// Add touch detection setup validation
 			bool touchSetupValid = ValidateTouchDetectionSetup();
 			LogToFile(diagnosticPath, $"Touch Detection Setup Valid: {touchSetupValid}");

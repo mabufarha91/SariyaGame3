@@ -79,12 +79,12 @@
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
-    <!-- Kinect SDK References -->
+    <!-- Kinect SDK v2.0 References - REAL KINECT ENABLED -->
     <Reference Include="Microsoft.Kinect">
-      <HintPath>C:\Program Files\Microsoft SDKs\Kinect\v2.0_1409\Lib\x64\Microsoft.Kinect.dll</HintPath>
+      <!-- Let the system find the DLL from GAC or installed location -->
     </Reference>
     <Reference Include="Microsoft.Kinect.Face">
-      <HintPath>C:\Program Files\Microsoft SDKs\Kinect\v2.0_1409\Lib\x64\Microsoft.Kinect.Face.dll</HintPath>
+      <!-- Let the system find the DLL from GAC or installed location -->
     </Reference>
   </ItemGroup>
   <ItemGroup>
@@ -132,6 +132,8 @@
       <DependentUpon>ProjectorWindow.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
+    <!-- MockKinect.cs - DISABLED: Real Kinect SDK v2.0 enabled -->
+    <!-- <Compile Include="Mocks\MockKinect.cs" /> -->
     <Compile Include="KinectManager\KinectManager.cs" />
     <Compile Include="UI\MovablePointsCanvas.cs" />
     <Compile Include="Models\CalibrationPoint.cs" />
