@@ -1148,6 +1148,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			int ax = Math.Max(0, (int)searchArea.X);
 			int bx = Math.Min(width, (int)searchArea.Right);
 
+			// Add debug logging for search area and bounds
+			LogToFile(GetDiagnosticPath(), $"SEARCH AREA DEBUG: searchArea=({searchArea.X:F1}, {searchArea.Y:F1}, {searchArea.Width:F1}, {searchArea.Height:F1})");
+			LogToFile(GetDiagnosticPath(), $"BOUNDS CALC: ay={ay}, by={by}, ax={ax}, bx={bx}");
+			LogToFile(GetDiagnosticPath(), $"LOOP RANGES: y={ay} to {by-1} (step 4), x={ax} to {bx-1} (step 4)");
+
 			int checkedPx = 0, detected = 0, samplesLogged = 0;
 
 			for (int y = ay; y < by; y += 4)
@@ -1176,27 +1181,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						samplesLogged++;
 					}
 
-					// Neighbor consistency (3x3 in steps of 4px) – zero latency, suppresses speckle
-					int agree = 0, tot = 0;
-					for (int dy = -4; dy <= 4; dy += 4)
-					{
-						int yy = y + dy; if (yy < ay || yy >= by) continue;
-						int baseRow = yy * width;
-						for (int dx = -4; dx <= 4; dx += 4)
-						{
-							int xx = x + dx; if (xx < ax || xx >= bx) continue;
-							int ii = baseRow + xx;
-							ushort dvn = depthData[ii];
-							if (dvn < 500 || dvn > 4500) continue;
-							var pn = csp[ii];
-							if (float.IsInfinity(pn.X) || float.IsInfinity(pn.Y) || float.IsInfinity(pn.Z)) continue;
-							double dn = planeNx * pn.X + planeNy * pn.Y + planeNz * pn.Z + planeD;
-							tot++;
-							if (dn > (minM * 0.7)) agree++;
-						}
-					}
-
-					if (d0 > minM && d0 < maxM && agree >= 4 && tot >= 6)
+					// Simple distance check - no neighbor validation
+					if (d0 > minM && d0 < maxM)
 					{
 						touchPixels.Add(new Point(x, y));
 						detected++;
