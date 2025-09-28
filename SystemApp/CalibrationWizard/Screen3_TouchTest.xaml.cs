@@ -52,6 +52,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		
 		// PERFORMANCE OPTIMIZATION
 		private WriteableBitmap depthBitmap; // Reuse depth bitmap
+		private byte[] depthPixels; // PERFORMANCE FIX: Add this class member
 		
 		// Add counter for debugging
 		private static int gradientLookupCounter = 0;
@@ -395,7 +396,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					depthBitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgr32, null);
 				}
 				
-				var pixels = new byte[width * height * 4];
+				// PERFORMANCE FIX: Reuse the pixel buffer instead of creating a new one every frame.
+				if (depthPixels == null || depthPixels.Length != width * height * 4)
+				{
+					depthPixels = new byte[width * height * 4];
+				}
 				
 				// Use fixed depth range for visualization (no longer dependent on wall distance)
 				double minDepth = 0.5; // 50cm minimum
@@ -427,15 +432,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						}
 						
 							// Proper grayscale mapping (BGR format)
-							pixels[i * 4] = intensity;     // Blue
-							pixels[i * 4 + 1] = intensity; // Green
-							pixels[i * 4 + 2] = intensity; // Red
-							pixels[i * 4 + 3] = 255;       // Alpha
+							depthPixels[i * 4] = intensity;     // Blue
+							depthPixels[i * 4 + 1] = intensity; // Green
+							depthPixels[i * 4 + 2] = intensity; // Red
+							depthPixels[i * 4 + 3] = 255;       // Alpha
 					}
 				}
 				
 				// Update pixels in existing bitmap
-				depthBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+				depthBitmap.WritePixels(new Int32Rect(0, 0, width, height), depthPixels, width * 4, 0);
 				
 				// Update the image
 				DepthImage.Source = depthBitmap;
@@ -1215,12 +1220,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					// Calculate the signed distance from the point to the plane
 					double signedDistance = planeNx * p.X + planeNy * p.Y + planeNz * p.Z + planeD;
 
-					// ADD PLANE VALIDATION: Check if plane equation is reasonable
-					if (Math.Abs(planeNx) < 0.1 || Math.Abs(planeNy) < 0.1 || Math.Abs(planeNz) < 0.1)
-					{
-						LogToFile(GetDiagnosticPath(), "ERROR: Invalid plane equation - plane normal too small");
-						continue;
-					}
+					// BUG FIX: The incorrect plane validation check has been REMOVED.
+					// The plane is already validated by NormalizeAndOrientPlane.
 
 					// CORE FIX: Use absolute distance to eliminate orientation dependency
 					double absoluteDistance = Math.Abs(signedDistance);
