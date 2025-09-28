@@ -655,6 +655,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			double thresholdMm = PlaneThresholdSlider.Value;
 			LogToFile(GetDiagnosticPath(), $"Plane threshold changed to: {thresholdMm:F1}mm");
 			
+			// Update the threshold value display
+			if (ThresholdValueText != null)
+			{
+				ThresholdValueText.Text = $"{thresholdMm:F0}mm";
+			}
+			
 			// Update status display
 			UpdateStatusText();
 		}
@@ -1163,7 +1169,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					pixelsChecked++;
 					validPixels++;
 
-					float signedDistance = (float)((plane.Nx * csp.X) + (plane.Ny * csp.Y) + (plane.Nz * csp.Z) - plane.D);
+					float signedDistance = (float)((plane.Nx * csp.X) + (plane.Ny * csp.Y) + (plane.Nz * csp.Z) + plane.D);
 					float absoluteDistance = Math.Abs(signedDistance);
 
 					// ENHANCED LOGGING: Sample point analysis (first 10 points)
