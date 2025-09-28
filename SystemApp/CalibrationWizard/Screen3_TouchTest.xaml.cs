@@ -431,7 +431,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							intensity = (byte)(255 * (1.0 - normalized));
 						}
 						
-							// Proper grayscale mapping (BGR format)
+						// Proper grayscale mapping (BGR format)
 							depthPixels[i * 4] = intensity;     // Blue
 							depthPixels[i * 4 + 1] = intensity; // Green
 							depthPixels[i * 4 + 2] = intensity; // Red
@@ -583,7 +583,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				if (!isPlaneValid || calibration?.TouchArea == null)
 				{
 				LogToFile(GetDiagnosticPath(), "WARNING: Invalid plane or touch area");
-						return;
+					return;
 				}
 
 				// Get camera space points
@@ -624,8 +624,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			if (!float.IsInfinity(colorPoint.X) && !float.IsInfinity(colorPoint.Y))
 			{
 				var touchArea = calibration.TouchArea;
-					return (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
-							colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom);
+				return (colorPoint.X >= touchArea.X && colorPoint.X <= touchArea.Right &&
+						colorPoint.Y >= touchArea.Y && colorPoint.Y <= touchArea.Bottom);
 				}
 			}
 			catch (Exception ex)
@@ -1009,12 +1009,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						depthArea = scaled;
 					}
 
-				var rect = new Rectangle
-				{
+					var rect = new Rectangle
+					{
 						Width = Math.Max(1, depthArea.Width),
 						Height = Math.Max(1, depthArea.Height),
-					Stroke = new SolidColorBrush(Colors.Yellow),
-					StrokeThickness = 2,
+						Stroke = new SolidColorBrush(Colors.Yellow),
+						StrokeThickness = 2,
 						Fill = new SolidColorBrush(Color.FromArgb(50, 255, 255, 0)),
 						Tag = "TouchAreaBoundary"
 					};
@@ -1022,7 +1022,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					Canvas.SetLeft(rect, depthArea.X);
 					Canvas.SetTop(rect, depthArea.Y);
 					
-				OverlayCanvas.Children.Add(rect);
+					OverlayCanvas.Children.Add(rect);
 					
 					LogToFile(GetDiagnosticPath(), $"Touch area boundary drawn: X={depthArea.X:F1}, Y={depthArea.Y:F1}, W={depthArea.Width:F1}, H={depthArea.Height:F1}");
 				}
@@ -1202,7 +1202,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			// Effective sensitivity and caps (no slider surprise)
 			thresholdM = Math.Max(0.030, Math.Min(0.080, thresholdM));
-			double minM = 0.020;                                     // >20 mm nearer than wall (was 10mm)
+
+			// THE FINAL TUNING FIX: Reduce the dead zone from 2cm to 1.2cm
+			// This will reject wall noise but accept a hand pressed against the wall
+			double minM = 0.012;                                     // >12 mm nearer than wall (reduced from 20mm)
 			double maxM = thresholdM; // Remove 25mm cap, use slider directly
 
 			var touchPixels = new List<Point>();
@@ -1415,11 +1418,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				for (int dy = 0; dy < depthHeight; dy += sampleStep)
 				{
 					for (int dx = 0; dx < depthWidth; dx += sampleStep)
-							{
-								int depthIndex = dy * depthWidth + dx;
-								if (depthIndex < depthData.Length && depthData[depthIndex] > 0)
-								{
-									var depthPoint = new DepthSpacePoint { X = dx, Y = dy };
+									{
+										int depthIndex = dy * depthWidth + dx;
+										if (depthIndex < depthData.Length && depthData[depthIndex] > 0)
+										{
+											var depthPoint = new DepthSpacePoint { X = dx, Y = dy };
 							var mappedColorPoint = kinectManager.CoordinateMapper.MapDepthPointToColorSpace(depthPoint, depthData[depthIndex]);
 							
 							// Check if this depth point maps to our color area
@@ -1904,7 +1907,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			LogToFile(diagnosticPath, "--- Validation Results ---");
 			bool validationResult = ValidateCalibrationData();
 			LogToFile(diagnosticPath, $"Calibration Valid: {validationResult}");
-			
+
 			// Add touch detection setup validation
 			bool touchSetupValid = ValidateTouchDetectionSetup();
 			LogToFile(diagnosticPath, $"Touch Detection Setup Valid: {touchSetupValid}");
