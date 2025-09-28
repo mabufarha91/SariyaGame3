@@ -1170,8 +1170,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			// Effective sensitivity and caps (no slider surprise)
 			thresholdM = Math.Max(0.030, Math.Min(0.080, thresholdM));
-			double minM = 0.010;                                     // >10 mm nearer than wall
-			double maxM = Math.Min(thresholdM * 1.5, MaxTouchOffsetM); // ≤25 mm cap
+			double minM = 0.020;                                     // >20 mm nearer than wall (was 10mm)
+			double maxM = thresholdM; // Remove 25mm cap, use slider directly
 
 			var touchPixels = new List<Point>();
 			int ay = Math.Max(0, (int)searchArea.Y);
@@ -1211,19 +1211,26 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					// Calculate the signed distance from the point to the plane
 					double signedDistance = planeNx * p.X + planeNy * p.Y + planeNz * p.Z + planeD;
 
+					// ADD PLANE VALIDATION: Check if plane equation is reasonable
+					if (Math.Abs(planeNx) < 0.1 || Math.Abs(planeNy) < 0.1 || Math.Abs(planeNz) < 0.1)
+					{
+						LogToFile(GetDiagnosticPath(), "ERROR: Invalid plane equation - plane normal too small");
+						continue;
+					}
+
 					// CORE FIX: Use absolute distance to eliminate orientation dependency
 					double absoluteDistance = Math.Abs(signedDistance);
 
 					// Log first few samples for visibility
 					if (samplesLogged < 5)
 					{
-						LogToFile(GetDiagnosticPath(), $"PLANE DISTANCE: Point=({p.X:F3}, {p.Y:F3}, {p.Z:F3}), AbsoluteDist={absoluteDistance:F3}m, Min={minM:F3}m, Max={maxM:F3}m");
+						LogToFile(GetDiagnosticPath(), $"PLANE DISTANCE: Point=({p.X:F3}, {p.Y:F3}, {p.Z:F3}), AbsoluteDist={absoluteDistance:F3}m, SignedDist={signedDistance:F3}m, Min={minM:F3}m, Max={maxM:F3}m");
 						DebugPlaneDistance(p, absoluteDistance);
 						samplesLogged++;
 					}
 
-					// Simple distance check - no neighbor validation
-					if (absoluteDistance > minM && absoluteDistance < maxM)
+					// Strict touch validation: must be closer than wall AND within distance range
+					if (absoluteDistance > minM && absoluteDistance < maxM && signedDistance < -0.005)
 					{
 						touchPixels.Add(new Point(x, y));
 						detected++;
@@ -1240,7 +1247,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var now = DateTime.Now;
 			var newTouches = new List<TouchPoint>();
 			foreach (var b in blobs)
-				if (b.Area >= minBlobAreaPoints && b.Area <= maxBlobAreaPoints)
+				if (b.Area >= Math.Max(minBlobAreaPoints, 150) && b.Area <= maxBlobAreaPoints) // Minimum 150 pixels
 					newTouches.Add(new TouchPoint { Position = b.Center, LastSeen = now, Area = b.Area, Depth = 0, SeenCount = 1 });
 
 			// keep your existing tracking/SeenCount/TTL code here...
