@@ -86,8 +86,8 @@
 							<Slider x:Name="PlaneThresholdSlider" Width="200" ValueChanged="PlaneThresholdSlider_ValueChanged"/>
 							<TextBlock x:Name="ThresholdValueText" Text="0.010 m" HorizontalAlignment="Center" FontSize="14" FontWeight="Bold" Foreground="#2196F3" Margin="0,5,0,15"/>
 							
-							<TextBlock Text="🚀 Advanced optimized detection active!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
-							<TextBlock Text="Smart sampling + optimized touch detection" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
+							<TextBlock Text="🎯 Robust touch detection active!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
+							<TextBlock Text="Environment-agnostic detection with density filtering" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
 						</StackPanel>
 					</GroupBox>
 					
@@ -109,7 +109,6 @@
 							<GroupBox Header="Camera View" Margin="0,0,0,15">
 								<StackPanel Margin="10">
 									<CheckBox x:Name="FlipDepthVerticallyCheckBox" IsChecked="True" Content="Flip depth vertically" Checked="FlipDepthVerticallyCheckBox_Changed" Unchecked="FlipDepthVerticallyCheckBox_Changed"/>
-									<CheckBox x:Name="UseSimpleDetectionCheckBox" IsChecked="False" Content="Use simple (plane) detection" Checked="DetectionMode_Changed" Unchecked="DetectionMode_Changed" Margin="0,8,0,0"/>
 									<CheckBox x:Name="ShowHeatmapCheckBox" IsChecked="False" Content="Show distance heatmap" Checked="Heatmap_Changed" Unchecked="Heatmap_Changed" Margin="0,4,0,0"/>
 								</StackPanel>
 							</GroupBox>
