@@ -1046,8 +1046,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				double colorCenterX = colorArea.X + colorArea.Width / 2;
 				double colorCenterY = colorArea.Y + colorArea.Height / 2;
 				
-				// Convert center to depth coordinates (simple proportional mapping)
-				double depthCenterX = (colorCenterX / 1920.0) * depthWidth;
+				// CRITICAL FIX: Apply the same horizontal flip as Screen 2 for coordinate consistency
+				// This ensures the detection area in Screen 3 matches what was defined in Screen 2
+				double flippedColorCenterX = 1920.0 - colorCenterX; // Apply horizontal flip
+				
+				// Convert the CORRECTED center to depth coordinates
+				double depthCenterX = (flippedColorCenterX / 1920.0) * depthWidth;
 				double depthCenterY = (colorCenterY / 1080.0) * depthHeight;
 				
 				// Keep the SAME relative size (don't shrink it!)
