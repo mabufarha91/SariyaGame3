@@ -1075,6 +1075,16 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				// Add debugging for output
 				LogToFile(GetDiagnosticPath(), $"CONVERT OUTPUT: DepthArea=({mappedArea.X:F1}, {mappedArea.Y:F1}, {mappedArea.Width:F1}, {mappedArea.Height:F1})");
+
+				// COMPREHENSIVE COORDINATE CONVERSION DIAGNOSTICS
+				LogToFile(GetDiagnosticPath(), $"COORDINATE CONVERSION DETAILS:");
+				LogToFile(GetDiagnosticPath(), $" Input ColorArea: X={colorArea.X:F1}, Y={colorArea.Y:F1}, W={colorArea.Width:F1}, H={colorArea.Height:F1}");
+				LogToFile(GetDiagnosticPath(), $" Color Center: ({colorCenterX:F1}, {colorCenterY:F1})");
+				LogToFile(GetDiagnosticPath(), $" Flipped Center: ({flippedColorCenterX:F1}, {colorCenterY:F1})");
+				LogToFile(GetDiagnosticPath(), $" Depth Center: ({depthCenterX:F1}, {depthCenterY:F1})");
+				LogToFile(GetDiagnosticPath(), $" Depth Dimensions: {depthWidth_mapped:F1}x{depthHeight_mapped:F1}");
+				LogToFile(GetDiagnosticPath(), $" Final Area: X={mappedArea.X:F1}, Y={mappedArea.Y:F1}, W={mappedArea.Width:F1}, H={mappedArea.Height:F1}");
+				LogToFile(GetDiagnosticPath(), $" Coordinate Transform: Color(1920x1080) -> Depth(512x424) with horizontal flip");
 				
 				LogToFile(GetDiagnosticPath(), $"FIXED MAPPING: Color {colorArea.Width:F0}x{colorArea.Height:F0} -> Depth {mappedArea.Width:F0}x{mappedArea.Height:F0} at ({mappedArea.X:F1}, {mappedArea.Y:F1})");
 				return mappedArea;
@@ -1154,6 +1164,19 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 						isPlaneValid = true;
 						LogToFile(GetDiagnosticPath(), $"Plane normalized & oriented: N=({planeNx:F6}, {planeNy:F6}, {planeNz:F6}), D={planeD:F6}");
+
+						// COMPREHENSIVE PLANE DIAGNOSTICS
+						LogToFile(GetDiagnosticPath(), $"PLANE CALCULATION: Original Normal=({planeNx:F6}, {planeNy:F6}, {planeNz:F6}), D={planeD:F6}");
+						LogToFile(GetDiagnosticPath(), $"PLANE MAGNITUDE: {Math.Sqrt(planeNx*planeNx + planeNy*planeNy + planeNz*planeNz):F6}");
+						LogToFile(GetDiagnosticPath(), $"PLANE VALIDATION: Nx={Math.Abs(planeNx):F6}, Ny={Math.Abs(planeNy):F6}, Nz={Math.Abs(planeNz):F6}");
+
+						// Test plane with camera origin
+						double cameraOriginTest = planeNx * 0 + planeNy * 0 + planeNz * 0 + planeD;
+						LogToFile(GetDiagnosticPath(), $"CAMERA ORIGIN TEST: planeD={planeD:F6}, CameraOriginEvaluation={cameraOriginTest:F6}");
+
+						// Test plane with sample wall points
+						string orientation = cameraOriginTest > 0 ? "TOWARDS" : "AWAY FROM";
+						LogToFile(GetDiagnosticPath(), $"PLANE ORIENTATION: Normal points {orientation} camera");
 					}
 					else
 					{
@@ -1188,12 +1211,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			int ax = Math.Max(0, (int)searchArea.X);
 			int bx = Math.Min(width, (int)searchArea.Right);
 
-			// Add debug logging for search area and bounds
-			LogToFile(GetDiagnosticPath(), $"SEARCH AREA DEBUG: searchArea=({searchArea.X:F1}, {searchArea.Y:F1}, {searchArea.Width:F1}, {searchArea.Height:F1})");
-			LogToFile(GetDiagnosticPath(), $"BOUNDS CALC: ay={ay}, by={by}, ax={ax}, bx={bx}");
-			LogToFile(GetDiagnosticPath(), $"DEPTH FRAME SIZE: {width}x{height}");
-			LogToFile(GetDiagnosticPath(), $"SEARCH AREA VALID: {(searchArea.Width > 0 && searchArea.Height > 0 ? "YES" : "NO")}");
-			LogToFile(GetDiagnosticPath(), $"LOOP RANGES: y={ay} to {by-1} (step 4), x={ax} to {bx-1} (step 4)");
+			// COMPREHENSIVE DETECTION AREA DIAGNOSTICS
+			LogToFile(GetDiagnosticPath(), $"DETECTION AREA ANALYSIS:");
+			LogToFile(GetDiagnosticPath(), $" Input searchArea: X={searchArea.X:F1}, Y={searchArea.Y:F1}, W={searchArea.Width:F1}, H={searchArea.Height:F1}");
+			LogToFile(GetDiagnosticPath(), $" Bounds: ay={ay}, by={by}, ax={ax}, bx={bx}");
+			LogToFile(GetDiagnosticPath(), $" Loop Range: y={ay} to {by-1} (step 4), x={ax} to {bx-1} (step 4)");
+			LogToFile(GetDiagnosticPath(), $" Total Pixels to Check: {((by-ay)/4) * ((bx-ax)/4)}");
+			LogToFile(GetDiagnosticPath(), $" Depth Frame: {width}x{height}");
+			LogToFile(GetDiagnosticPath(), $" Thresholds: minM={minM:F3}m ({minM*1000:F0}mm), maxM={maxM:F3}m ({maxM*1000:F0}mm)");
 
 			int checkedPx = 0, detected = 0, samplesLogged = 0;
 
@@ -1226,16 +1251,25 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					// CORE FIX: Use absolute distance to eliminate orientation dependency
 					double absoluteDistance = Math.Abs(signedDistance);
 
-					// Log first few samples for visibility
-					if (samplesLogged < 5)
+					// Log first few samples for comprehensive analysis
+					if (samplesLogged < 10) // Increased from 5 to 10
 					{
-						LogToFile(GetDiagnosticPath(), $"PLANE DISTANCE: Point=({p.X:F3}, {p.Y:F3}, {p.Z:F3}), AbsoluteDist={absoluteDistance:F3}m, SignedDist={signedDistance:F3}m, Min={minM:F3}m, Max={maxM:F3}m");
-						DebugPlaneDistance(p, absoluteDistance);
+						LogToFile(GetDiagnosticPath(), $"SAMPLE POINT {samplesLogged + 1}:");
+						LogToFile(GetDiagnosticPath(), $" Position: ({p.X:F3}, {p.Y:F3}, {p.Z:F3})");
+						LogToFile(GetDiagnosticPath(), $" Signed Distance: {signedDistance:F6}m");
+						LogToFile(GetDiagnosticPath(), $" Absolute Distance: {absoluteDistance:F6}m");
+						LogToFile(GetDiagnosticPath(), $" Threshold Check: {absoluteDistance:F6} > {minM:F6} = {absoluteDistance > minM}");
+						LogToFile(GetDiagnosticPath(), $" Range Check: {absoluteDistance:F6} < {maxM:F6} = {absoluteDistance < maxM}");
+						LogToFile(GetDiagnosticPath(), $" Detection Logic: absoluteDistance > minM AND absoluteDistance < maxM");
+						string result = (absoluteDistance > minM && absoluteDistance < maxM) ? "DETECTED" : "REJECTED";
+						LogToFile(GetDiagnosticPath(), $" FINAL RESULT: {result}");
 						samplesLogged++;
 					}
 
-					// Strict touch validation: must be closer than wall AND within distance range
-					if (absoluteDistance > minM && absoluteDistance < maxM && signedDistance < -0.005)
+					// THE FINAL, CRITICAL FIX: Remove the signedDistance < -0.005 check
+					// The minM threshold is sufficient to prevent phantom touches from the wall
+					// This makes detection robust regardless of the plane's orientation
+					if (absoluteDistance > minM && absoluteDistance < maxM)
 					{
 						touchPixels.Add(new Point(x, y));
 						detected++;
@@ -1243,7 +1277,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 			}
 
-			LogToFile(GetDiagnosticPath(), $"DETECTION STATS (simple): Checked={checkedPx}, DetectedPx={detected}, Thr={thresholdM*1000:F0}mm");
+			// COMPREHENSIVE DETECTION STATISTICS
+			LogToFile(GetDiagnosticPath(), $"DETECTION STATS (comprehensive):");
+			LogToFile(GetDiagnosticPath(), $" Pixels Checked: {checkedPx}");
+			LogToFile(GetDiagnosticPath(), $" Pixels Detected: {detected}");
+			LogToFile(GetDiagnosticPath(), $" Detection Rate: {(checkedPx > 0 ? (double)detected/checkedPx*100 : 0):F2}%");
+			LogToFile(GetDiagnosticPath(), $" Threshold: {thresholdM*1000:F0}mm (effective)");
+			LogToFile(GetDiagnosticPath(), $" Search Area: {searchArea.Width*searchArea.Height:F0} pixels");
+			LogToFile(GetDiagnosticPath(), $" Processing Efficiency: {checkedPx/(searchArea.Width*searchArea.Height/16)*100:F1}% of search area");
 
 			// ADD THIS LINE: Call debugging method
 			DebugTouchDetection(checkedPx, detected, touchPixels, activeTouches);
@@ -1251,9 +1292,25 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var blobs = SimpleCluster(touchPixels, 20);
 			var now = DateTime.Now;
 			var newTouches = new List<TouchPoint>();
+
+			// COMPREHENSIVE TOUCH TRACKING DIAGNOSTICS
+			LogToFile(GetDiagnosticPath(), $"TOUCH TRACKING ANALYSIS:");
+			LogToFile(GetDiagnosticPath(), $" Raw Touch Pixels: {touchPixels.Count}");
+			LogToFile(GetDiagnosticPath(), $" Clustered Blobs: {blobs.Count}");
+			LogToFile(GetDiagnosticPath(), $" Min Blob Area: {minBlobAreaPoints} pixels");
+			LogToFile(GetDiagnosticPath(), $" Max Blob Area: {maxBlobAreaPoints} pixels");
+
+			foreach (var blob in blobs.Take(5)) // Log first 5 blobs
+			{
+				LogToFile(GetDiagnosticPath(), $" Blob: Center=({blob.Center.X:F1}, {blob.Center.Y:F1}), Area={blob.Area} pixels");
+			}
+
 			foreach (var b in blobs)
 				if (b.Area >= Math.Max(minBlobAreaPoints, 150) && b.Area <= maxBlobAreaPoints) // Minimum 150 pixels
 					newTouches.Add(new TouchPoint { Position = b.Center, LastSeen = now, Area = b.Area, Depth = 0, SeenCount = 1 });
+
+			LogToFile(GetDiagnosticPath(), $" Active Touches Before: {activeTouches.Count}");
+			LogToFile(GetDiagnosticPath(), $" New Touches: {newTouches.Count}");
 
 			// keep your existing tracking/SeenCount/TTL code here...
 			var updated = new List<TouchPoint>();
@@ -1277,6 +1334,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 			// ADD THIS LINE: Call debugging method
 			DebugTouchTracking(newTouches, updated);
+
+			LogToFile(GetDiagnosticPath(), $" Active Touches After: {updated.Count}");
 
 			activeTouches = updated;
 		}
