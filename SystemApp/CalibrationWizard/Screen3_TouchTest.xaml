@@ -82,12 +82,15 @@
 					<!-- SIMPLE TOUCH DETECTION -->
 					<GroupBox Header="🎯 Touch Detection" Margin="0,0,0,20">
 						<StackPanel Margin="10">
-							<TextBlock Text="Sensitivity" FontWeight="Bold" Margin="0,0,0,5"/>
-							<Slider x:Name="PlaneThresholdSlider" Width="200" ValueChanged="PlaneThresholdSlider_ValueChanged"/>
-							<TextBlock x:Name="ThresholdValueText" Text="0.010 m" HorizontalAlignment="Center" FontSize="14" FontWeight="Bold" Foreground="#2196F3" Margin="0,5,0,15"/>
+							<TextBlock Text="Touch Sensitivity (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
+							<Slider x:Name="PlaneThresholdSlider" Minimum="5" Maximum="50" Value="30" 
+									TickFrequency="5" TickPlacement="BottomRight" 
+									ValueChanged="PlaneThresholdSlider_ValueChanged" Margin="0,5,0,10"/>
+							<TextBlock Text="Maximum distance from wall for touch detection" 
+									   FontSize="10" Foreground="#666" Margin="0,0,0,10"/>
 							
-							<TextBlock Text="🎯 Robust touch detection active!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
-							<TextBlock Text="Environment-agnostic detection with density filtering" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
+							<TextBlock Text="🎯 One-sided touch detection active!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
+							<TextBlock Text="Standard thresholding with slider-controlled sensitivity" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
 						</StackPanel>
 					</GroupBox>
 					
