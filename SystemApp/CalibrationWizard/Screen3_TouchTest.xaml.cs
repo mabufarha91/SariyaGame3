@@ -92,6 +92,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		// Post-release guard fields for preventing ghost touches
 		private bool hadTouchLastFrame = false;
 		private DateTime guardUntil = DateTime.MinValue;
+
+		// Hand gating fields for user correlation
+		private bool useHandGate = false;
+		private double handGateRadiusPx = 70.0; // depth pixels radius around the tracked hand
 		
 		// VARIABLE TOUCH SIZE DETECTION for different interaction types
 		private int maxBlobAreaPoints = 1000; // Maximum touch size for large objects
@@ -595,13 +599,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			// Thresholds (aim for 5–10 mm)
 			double sliderM = (PlaneThresholdSlider != null ? PlaneThresholdSlider.Value : 8.0) * 0.001;
 			float thrM = (float)Math.Max(0.004, Math.Min(0.012, sliderM)); // clamp to 4..12mm
-			const float minDenom = 0.15f;    // avoid grazing angles (n·d̂ too small)
 
 			// Capture time for post-release guard
 			var now = DateTime.Now;
 
-			// Local threshold for pixel-level detection (moved outside loop for efficiency)
-			float localThrM = (float)Math.Max(0.004, Math.Min(0.012, sliderM)); // clamp to 4..12mm
+			// Lower bound: 0.8 mm normally; 3.5 mm during 200 ms guard
+			float baseMinPos = 0.0008f;
+			float guardMinPos = (now <= guardUntil) ? Math.Max(0.0035f, thrM * 0.5f) : baseMinPos;
 
 			// Work area
 			var area = InflateRect(cachedDepthTouchArea, 8, 8, width, height);
@@ -629,7 +633,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			LogToFile(GetDiagnosticPath(), $"=== RAY-BASED ALGORITHM VALIDATION ===");
 			LogToFile(GetDiagnosticPath(), $"Timestamp: {DateTime.Now:HH:mm:ss.fff}");
 			LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F6}, {plane.Ny:F6}, {plane.Nz:F6}), D={plane.D:F6}");
-			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={1.5}mm, maxDelta={thrM*1000:F1}mm");
+			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={guardMinPos*1000:F1}mm, maxDelta={thrM*1000:F1}mm");
 			LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
 			LogToFile(GetDiagnosticPath(), $"Algorithm: Along-ray residual calculation with 3×3 density filtering");
 
@@ -658,9 +662,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 					float delta = (float)(tExp - r);                  // >0 means in front of plane
 
-					// guarded lower bound: while in guard, require a slightly stronger minimum to avoid instant re-trigger
-					float baseMinPos = 0.0005f;      // 0.5mm
-					float guardMinPos = (now <= guardUntil) ? Math.Max(0.003f, thrM * 0.4f) : baseMinPos;
 
 					if (delta < guardMinPos || delta > thrM) continue;
 
@@ -680,7 +681,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						LogToFile(GetDiagnosticPath(), $"  Ray Direction: ({dx:F3}, {dy:F3}, {dz:F3})");
 						LogToFile(GetDiagnosticPath(), $"  Plane Intersection: denom={denom:F3}, t_exp={tExp:F3}m");
 						LogToFile(GetDiagnosticPath(), $"  Along-Ray Residual: δ={delta*1000:F1}mm");
-						LogToFile(GetDiagnosticPath(), $"  Threshold Check: {delta*1000:F1}mm in range [{1.5}, {thrM*1000:F1}]mm");
+						LogToFile(GetDiagnosticPath(), $"  Threshold Check: {delta*1000:F1}mm in range [{guardMinPos*1000:F1}, {thrM*1000:F1}]mm");
 						LogToFile(GetDiagnosticPath(), $"  TouchArea Validation: {IsPointInTouchArea(x, y, depth)}");
 						sampleCount++;
 					}
@@ -688,7 +689,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 
 			// 2) 3x3 density filter to remove speckle
-			const int minNeighbors = 4; // 4 of 8 neighbors
+			const int minNeighbors = 4; // not 5
 			for (int y = ay + 1; y < by - 1; y++)
 			{
 				int row = y * width;
@@ -735,10 +736,17 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 			}
 
+			// Track hands in depth space and gate blobs near hands
+			var handPts = GetTrackedHandsDepthPixels(width, height);
+			if (useHandGate)
+			{
+				LogToFile(GetDiagnosticPath(), $"HAND GATE: ON, Hands={handPts.Count}, R={handGateRadiusPx:F0}px");
+			}
+
 			// Suppress "wall fill" frames - if too much of ROI looks like touch, it's the wall
 			int roiPixels = (bx - ax) * (by - ay);
 			double fill = survivors.Count / (double)Math.Max(1, roiPixels);
-			if (fill > 0.05) // >5% of ROI looks like "touch" → it's the wall; suppress this frame
+			if (fill > 0.04) // >4% of ROI → it's the wall; suppress this frame
 			{
 				UpdateTouchTracking(new List<Point>());
 				UpdateTouchVisuals(new List<Point>());
@@ -770,10 +778,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 
 				// Require a portion of the blob to be very close to the wall (contact)
-				//  - 2.5mm contact threshold
-				//  - at least 12% of pixels within contact range
-				const float contactOn = 0.0025f;     // 2.5mm
-				const float contactFracMin = 0.12f;  // 12%
+				//  - 2.0mm contact threshold
+				//  - at least 10% of pixels within contact range
+				const float contactOn = 0.0020f;   // 2.0 mm
+				const float contactFracMin = 0.10f;  // 10%
 
 				int below = 0;
 				foreach (var pt in blob)
@@ -818,6 +826,19 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(GetDiagnosticPath(), $"  Safety Check: sumW={sumW:F6} (passed: {Math.Abs(sumW) >= 1e-9})");
 				blobIndex++;
 
+				// Hand proximity gate (only if enabled)
+				if (useHandGate)
+				{
+					bool nearHand = false;
+					double r2 = handGateRadiusPx * handGateRadiusPx;
+					foreach (var hp in handPts)
+					{
+						double dxh = best.X - hp.X, dyh = best.Y - hp.Y;
+						if (dxh*dxh + dyh*dyh <= r2) { nearHand = true; break; }
+					}
+					if (!nearHand) continue;
+				}
+
 				touchPoints.Add(best);
 			}
 
@@ -840,7 +861,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			LogToFile(GetDiagnosticPath(), $"Timestamp: {DateTime.Now:HH:mm:ss.fff}");
 			LogToFile(GetDiagnosticPath(), $"Algorithm: Ray-based with along-ray residual calculation");
 			LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
-			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={1.5}mm, maxDelta={thrM*1000:F1}mm");
+			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={guardMinPos*1000:F1}mm, maxDelta={thrM*1000:F1}mm");
 			LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F3}, {plane.Ny:F3}, {plane.Nz:F3}), D={plane.D:F3}");
 
 			// Count total candidates and survivors
@@ -2346,6 +2367,36 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			catch (Exception ex)
 			{
 				System.Diagnostics.Debug.WriteLine($"LogRealTimeDebug Error: {ex.Message}");
+			}
+		}
+
+		private List<Point> GetTrackedHandsDepthPixels(int width, int height)
+		{
+			var pts = new List<Point>();
+			try
+			{
+				var bodies = kinectManager.GetLatestBodiesSnapshot();
+				if (bodies == null) return pts;
+				foreach (var body in bodies)
+				{
+					if (body == null || !body.IsTracked) continue;
+					var joints = body.Joints;
+					AddJointDepth(joints[JointType.HandRight], pts, width, height);
+					AddJointDepth(joints[JointType.HandLeft], pts, width, height);
+				}
+			}
+			catch { }
+			return pts;
+		}
+
+		private void AddJointDepth(Joint j, List<Point> pts, int width, int height)
+		{
+			if (j.TrackingState == TrackingState.NotTracked) return;
+			var ds = kinectManager.CoordinateMapper.MapCameraPointToDepthSpace(j.Position);
+			if (!float.IsInfinity(ds.X) && !float.IsInfinity(ds.Y) &&
+				ds.X >= 0 && ds.X < width && ds.Y >= 0 && ds.Y < height)
+			{
+				pts.Add(new Point(ds.X, ds.Y));
 			}
 		}
 	}
