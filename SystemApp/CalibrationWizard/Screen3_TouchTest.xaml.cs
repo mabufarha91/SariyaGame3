@@ -88,6 +88,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private int minBlobAreaPoints = 100;
 		private double smoothingAlpha = 0.30;
+		private int warmupFrames = 10;
+		private int framesSinceStart = 0;
 		
 		// Post-release guard fields for preventing ghost touches
 		private bool hadTouchLastFrame = false;
@@ -567,6 +569,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
+			framesSinceStart++;
+			if (framesSinceStart <= warmupFrames)
+			{
+				UpdateTouchTracking(new List<Point>());
+				UpdateTouchVisuals(new List<Point>());
+				DetectionStatusText.Text = $"Warming up ({framesSinceStart}/{warmupFrames})";
+				return;
+			}
+
 			// Reset diagnostic counters for this frame
 			sampleCount = 0;
 			blobIndex = 0;
@@ -841,6 +852,50 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 				touchPoints.Add(best);
 			}
+
+			// Hold touches persisting under 4mm even if blob breaks
+			const float holdOff = 0.004f; // 4mm
+			var addedFromHold = 0;
+			foreach (var t in activeTouches)
+			{
+				int ix = (int)Math.Round(t.Position.X);
+				int iy = (int)Math.Round(t.Position.Y);
+				if (ix < ax || ix >= bx || iy < ay || iy >= by) continue;
+				int idx = iy * width + ix;
+
+				// get current frame residual at the previous touch position
+				float d = (idx >= 0 && idx < deltaRay.Length && candidateMask[idx]) ? deltaRay[idx] : float.MaxValue;
+				if (d == float.MaxValue)
+				{
+					var p = cameraSpacePoints[idx];
+					if (!(float.IsInfinity(p.X) || float.IsInfinity(p.Y) || float.IsInfinity(p.Z)))
+					{
+						double r = Math.Sqrt(p.X * p.X + p.Y * p.Y + p.Z * p.Z);
+						if (r > 0.2 && r < 5.0)
+						{
+							float invR = (float)(1.0 / r);
+							float ddx = p.X * invR, ddy = p.Y * invR, ddz = p.Z * invR;
+							float denom2 = (float)(plane.Nx * ddx + plane.Ny * ddy + plane.Nz * ddz);
+							if (Math.Abs(denom2) >= 0.05f)
+							{
+								float tExp2 = (float)(-plane.D / denom2);
+								d = (float)(tExp2 - r);
+							}
+						}
+					}
+				}
+
+				if (d > 0 && d <= holdOff)
+				{
+					bool exists = touchPoints.Any(p => Math.Abs(p.X - ix) < 8 && Math.Abs(p.Y - iy) < 8);
+					if (!exists)
+					{
+						touchPoints.Add(new Point(ix, iy));
+						addedFromHold++;
+					}
+				}
+			}
+			LogToFile(GetDiagnosticPath(), $"HOLD ADDITIONS: {addedFromHold}, Final Touches (pre-guard): {touchPoints.Count}");
 
 			// Update guard state to prevent immediate re-trigger after touch ends
 			if (touchPoints.Count == 0 && hadTouchLastFrame)
@@ -1463,8 +1518,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			foreach (var p in newTouches)
 			{
 				var existing = activeTouches.FirstOrDefault(t =>
-					Math.Abs(t.Position.X - p.X) < 20 &&
-					Math.Abs(t.Position.Y - p.Y) < 20);
+					Math.Abs(t.Position.X - p.X) < 28 &&
+					Math.Abs(t.Position.Y - p.Y) < 28);
 
 				if (existing != null)
 				{
