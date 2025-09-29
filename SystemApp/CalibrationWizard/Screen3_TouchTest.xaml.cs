@@ -42,6 +42,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		// PERFORMANCE OPTIMIZATION
 		private WriteableBitmap depthBitmap; // Reuse depth bitmap
 		private byte[] depthPixels; // PERFORMANCE FIX: Add this class member
+
+		// Touch candidate buffers (reused each frame)
+		private bool[] candidateMask;
+		private float[] deltaRay;
+		private byte[] neighborCount;
+
+		// Diagnostic logging counters
+		private static int sampleCount = 0;
+		private static int blobIndex = 0;
 		
 		
 		// Simple detection mode and heatmap
@@ -85,9 +94,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private string currentTouchMode = "Hand"; // "Hand", "Ball", "Custom"
 		private Dictionary<string, int> touchModeSettings = new Dictionary<string, int>
 		{
-			{ "Hand", 100 },      // Realistic touches for hand detection
-			{ "Ball", 200 },     // Medium touches for balls
-			{ "Custom", 50 }     // Custom setting
+			{ "Hand", 50 },       // Better default for finger touches
+			{ "Ball", 200 },      // Medium touches for balls
+			{ "Custom", 50 }      // Custom setting
 		};
 
 		public Screen3_TouchTest(KinectManager.KinectManager manager, CalibrationConfig config)
@@ -238,12 +247,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				if (PlaneThresholdSlider != null)
 				{
-					// Sensitivity in millimeters (UI): keep value set by calibration if available
-					PlaneThresholdSlider.Minimum = 5;     // 5mm min
-					PlaneThresholdSlider.Maximum = 80;    // 80mm max
+					// Sensitivity in millimeters (UI)
+					PlaneThresholdSlider.Minimum = 2;   // 2mm min
+					PlaneThresholdSlider.Maximum = 25;  // 25mm max
 					if (PlaneThresholdSlider.Value < PlaneThresholdSlider.Minimum || PlaneThresholdSlider.Value > PlaneThresholdSlider.Maximum)
 					{
-						PlaneThresholdSlider.Value = 30; // default 30mm
+						PlaneThresholdSlider.Value = 8; // default 8mm
 					}
 					
 					LogToFile(GetDiagnosticPath(), $"Threshold slider: {PlaneThresholdSlider.Value}mm (range: {PlaneThresholdSlider.Minimum}-{PlaneThresholdSlider.Maximum}mm)");
@@ -550,54 +559,234 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
-			// Keep all initial validation checks
-				if (!isPlaneValid || calibration?.TouchArea == null)
-				{
+			// Reset diagnostic counters for this frame
+			sampleCount = 0;
+			blobIndex = 0;
+
+			// Validate prerequisites
+			if (!isPlaneValid || calibration?.TouchArea == null)
+			{
 				LogToFile(GetDiagnosticPath(), "WARNING: Invalid plane or touch area");
-						return;
-				}
+				return;
+			}
 
-				// Get camera space points
-				CameraSpacePoint[] cameraSpacePoints;
-				int depthWidth, depthHeight;
-				if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out depthWidth, out depthHeight))
-				{
+			// Camera space for this frame
+			CameraSpacePoint[] cameraSpacePoints;
+			int depthWidth, depthHeight;
+			if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out depthWidth, out depthHeight))
+			{
 				LogToFile(GetDiagnosticPath(), "WARNING: Camera space frame failed, skipping detection");
-					return;
+				return;
+			}
+
+			// Allocate reusable buffers
+			int len = width * height;
+			if (candidateMask == null || candidateMask.Length != len)
+			{
+				candidateMask = new bool[len];
+				deltaRay = new float[len];
+				neighborCount = new byte[len];
+			}
+
+			// Thresholds (aim for 5–10 mm)
+			double sliderM = (PlaneThresholdSlider != null ? PlaneThresholdSlider.Value : 8.0) * 0.001;
+			float thrM = (float)Math.Max(0.003, Math.Min(0.025, sliderM)); // clamp to 3..25 mm
+			const float minDeltaM = -0.001f; // allow tiny negative due to noise
+			const float minDenom = 0.15f;    // avoid grazing angles (n·d̂ too small)
+
+			// Work area
+			var area = InflateRect(cachedDepthTouchArea, 8, 8, width, height);
+			int ax = Math.Max(0, (int)area.X);
+			int ay = Math.Max(0, (int)area.Y);
+			int bx = Math.Min(width, (int)area.Right);
+			int by = Math.Min(height, (int)area.Bottom);
+
+			// Clear masks in the region only
+			for (int y = ay; y < by; y++)
+			{
+				int row = y * width;
+				for (int x = ax; x < bx; x++)
+				{
+					int i = row + x;
+					candidateMask[i] = false;
+					neighborCount[i] = 0;
+				}
+			}
+
+			// Plane (normalized & oriented earlier)
+			var plane = new Plane { Nx = (float)planeNx, Ny = (float)planeNy, Nz = (float)planeNz, D = (float)planeD };
+
+			// 1) Build candidate mask using along-ray residual and color TouchArea gating
+			for (int y = ay; y < by; y++)
+			{
+				int row = y * width;
+				for (int x = ax; x < bx; x++)
+				{
+					int i = row + x;
+					ushort depth = depthData[i];
+					if (depth == 0) continue;
+
+					var p = cameraSpacePoints[i];
+					if (float.IsInfinity(p.X) || float.IsInfinity(p.Y) || float.IsInfinity(p.Z)) continue;
+
+					double r = Math.Sqrt(p.X * p.X + p.Y * p.Y + p.Z * p.Z);
+					if (r < 0.2 || r > 5.0) continue;
+
+					float invR = (float)(1.0 / r);
+					float dx = p.X * invR, dy = p.Y * invR, dz = p.Z * invR;
+					float denom = (float)(plane.Nx * dx + plane.Ny * dy + plane.Nz * dz);
+					if (denom <= minDenom) continue;
+
+					float tExp = (float)(-plane.D / denom);
+					float delta = (float)(tExp - r); // >0 means in front of plane toward camera
+
+					if (delta < minDeltaM || delta > thrM) continue;
+
+					// Keep only pixels whose depth->color mapping lands inside the calibrated TouchArea
+					if (!IsPointInTouchArea(x, y, depth)) continue;
+
+					candidateMask[i] = true;
+					deltaRay[i] = delta;
+
+					// Add sample point logging (first 5 candidates only)
+					if (sampleCount < 5)
+					{
+						LogToFile(GetDiagnosticPath(), $"SAMPLE CANDIDATE {sampleCount + 1}:");
+						LogToFile(GetDiagnosticPath(), $"  Position: ({x}, {y}), Depth: {depth}");
+						LogToFile(GetDiagnosticPath(), $"  CameraSpace: ({p.X:F3}, {p.Y:F3}, {p.Z:F3})");
+						LogToFile(GetDiagnosticPath(), $"  Range: {r:F3}m, Delta: {delta*1000:F1}mm");
+						sampleCount++;
+					}
+				}
+			}
+
+			// 2) 3x3 density filter to remove speckle
+			const int minNeighbors = 4; // 4 of 8 neighbors
+			for (int y = ay + 1; y < by - 1; y++)
+			{
+				int row = y * width;
+				for (int x = ax + 1; x < bx - 1; x++)
+				{
+					int i = row + x;
+					if (!candidateMask[i]) continue;
+					int count = 0;
+					for (int yy = -1; yy <= 1; yy++)
+					{
+						int nrow = (y + yy) * width;
+						for (int xx = -1; xx <= 1; xx++)
+						{
+							if (xx == 0 && yy == 0) continue;
+							if (candidateMask[nrow + (x + xx)]) count++;
+						}
+					}
+					if (count >= minNeighbors) neighborCount[i] = (byte)count; else candidateMask[i] = false;
+				}
+			}
+
+			// 3) Collect surviving pixels and group into blobs
+			var survivors = new List<Point>();
+			for (int y = ay; y < by; y++)
+			{
+				int row = y * width;
+				for (int x = ax; x < bx; x++)
+				{
+					if (candidateMask[row + x]) survivors.Add(new Point(x, y));
+				}
+			}
+
+			var blobs = FindBlobs(survivors);
+			var touchPoints = new List<Point>();
+
+			foreach (var blob in blobs)
+			{
+				if (blob.Count < MinBlobAreaSlider.Value || blob.Count > MaxBlobAreaSlider.Value) continue;
+
+				// δ‑weighted centroid
+				double sumW = 0, sumX = 0, sumY = 0;
+				float minDelta = float.MaxValue;
+				Point minDeltaPt = default(Point);
+
+				foreach (var pt in blob)
+				{
+					int i = ((int)pt.Y) * width + ((int)pt.X);
+					float d = deltaRay[i];
+					if (d < minDelta && d >= minDeltaM) { minDelta = d; minDeltaPt = pt; }
+					double w = Math.Max(0.0001, thrM - d); // closer to plane ⇒ higher weight
+					sumW += w;
+					sumX += pt.X * w;
+					sumY += pt.Y * w;
 				}
 
-			// --- ADD THIS ROBUSTNESS CHECK ---
-			// Add a check to ensure the camera space points array is valid before processing
-				if (cameraSpacePoints == null || cameraSpacePoints.Length == 0)
+				if (sumW <= 0) continue;
+
+				// ADD SAFETY CHECK:
+				if (Math.Abs(sumW) < 1e-9) continue; // Prevent division by zero
+
+				// Refine to the δ-minimum's local area for stability
+				int cx = (int)Math.Round(sumX / sumW);
+				int cy = (int)Math.Round(sumY / sumW);
+
+				// Optional local min 3×3 snap
+				Point best = minDeltaPt;
+				float bestDelta = minDelta;
+				for (int yy = -1; yy <= 1; yy++)
 				{
-				LogToFile(GetDiagnosticPath(), "WARNING: Camera space points array is null or empty, skipping detection");
-						return;
+					int y0 = cy + yy; if (y0 < ay || y0 >= by) continue;
+					for (int xx = -1; xx <= 1; xx++)
+					{
+						int x0 = cx + xx; if (x0 < ax || x0 >= bx) continue;
+						int i = y0 * width + x0;
+						if (!candidateMask[i]) continue;
+						float d = deltaRay[i];
+						if (d < bestDelta) { bestDelta = d; best = new Point(x0, y0); }
 					}
-			// --- END ADDITION ---
+				}
 
-			// Get threshold and search area
-			var thresholdSliderM = PlaneThresholdSlider.Value * 0.001;
-			var threshold = Math.Max(0.030, Math.Min(0.080, thresholdSliderM));
-			var searchArea = InflateRect(cachedDepthTouchArea, 12, 12, width, height);
+				// Add detailed blob analysis
+				LogToFile(GetDiagnosticPath(), $"BLOB ANALYSIS {blobIndex + 1}:");
+				LogToFile(GetDiagnosticPath(), $"  Area: {blob.Count} pixels");
+				LogToFile(GetDiagnosticPath(), $"  MinDelta: {minDelta*1000:F1}mm at ({minDeltaPt.X}, {minDeltaPt.Y})");
+				LogToFile(GetDiagnosticPath(), $"  Centroid: ({cx}, {cy})");
+				LogToFile(GetDiagnosticPath(), $"  Final Position: ({best.X}, {best.Y})");
+				blobIndex++;
 
-			// Create a simple Plane object from your calibration data
-			var plane = new Plane 
-			{ 
-				Nx = (float)planeNx, 
-				Ny = (float)planeNy, 
-				Nz = (float)planeNz, 
-				D = (float)planeD 
-			};
+				touchPoints.Add(best);
+			}
 
-			// Call the new, cleaner detection method
-			var detectedTouches = DetectTouches(cameraSpacePoints, plane);
+			UpdateTouchTracking(touchPoints);
+			UpdateTouchVisuals(touchPoints);
 
-			// Update touch tracking and visuals
-			UpdateTouchTracking(detectedTouches);
-			UpdateTouchVisuals(detectedTouches);
-			
-			DetectionStatusText.Text = $"Touches: {activeTouches.Count} ({threshold*1000:F0}mm)";
-			StatusText.Text = $"Detection active (simple)";
+			DetectionStatusText.Text = $"Touches: {activeTouches.Count} ({thrM * 1000:F0}mm)";
+			StatusText.Text = $"Detection active (ray-based)";
+
+			// Add comprehensive diagnostic logging
+			LogToFile(GetDiagnosticPath(), $"=== DETECTION FRAME SUMMARY ===");
+			LogToFile(GetDiagnosticPath(), $"Timestamp: {DateTime.Now:HH:mm:ss.fff}");
+			LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
+			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={minDeltaM*1000:F1}mm, maxDelta={thrM*1000:F1}mm");
+			LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F3}, {plane.Ny:F3}, {plane.Nz:F3}), D={plane.D:F3}");
+
+			// Count candidates and survivors
+			int totalCandidates = 0;
+			int survivorsAfterDensity = 0;
+			for (int y = ay; y < by; y++)
+			{
+				int row = y * width;
+				for (int x = ax; x < bx; x++)
+				{
+					if (candidateMask[row + x]) totalCandidates++;
+				}
+			}
+
+			for (int i = 0; i < len; i++)
+			{
+				if (candidateMask[i]) survivorsAfterDensity++;
+			}
+
+			LogToFile(GetDiagnosticPath(), $"Detection Stats: Candidates={totalCandidates}, AfterDensityFilter={survivorsAfterDensity}");
+			LogToFile(GetDiagnosticPath(), $"Blobs Found: {blobs.Count}, Final Touches: {touchPoints.Count}");
+			LogToFile(GetDiagnosticPath(), $"Active Touches: {activeTouches.Count}");
+			LogToFile(GetDiagnosticPath(), $"=================================");
 		}
 		
 		// CORRECTED COORDINATE MAPPING METHOD
@@ -638,7 +827,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			status.AppendLine($"Calibration: ✓ Loaded");
 			status.AppendLine($"Plane: ✓ Valid (N=({planeNx:F3}, {planeNy:F3}, {planeNz:F3}), D={planeD:F3})");
 			status.AppendLine($"Touch Area: ✓ Active ({cachedDepthTouchArea.Width:F0}x{cachedDepthTouchArea.Height:F0} pixels)");
-			status.AppendLine($"Detection: ✓ One-sided thresholding");
+			status.AppendLine($"Detection: ✓ Ray-based with density filtering");
 			status.AppendLine($"Sensitivity: {PlaneThresholdSlider?.Value ?? 30:F1}mm (slider-controlled)");
 			status.AppendLine($"Min Blob Area: {MinBlobAreaSlider?.Value ?? 20:F0} pixels");
 			status.AppendLine($"Active Touches: {activeTouches.Count}");
@@ -1122,145 +1311,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 
-		// REPLACE DetectTouchesSimple with this capture‑free, plane‑only detector
-		/// <summary>
-		/// New main method to detect touches by finding the closest point within a blob,
-		/// using a more robust one-sided threshold.
-		/// </summary>
-		private List<Point> DetectTouches(CameraSpacePoint[] cameraSpacePoints, Plane plane)
-		{
-			if (cachedDepthTouchArea.IsEmpty)
-			{
-				LogToFile(GetDiagnosticPath(), "SKIPPING DETECTION: cachedDepthTouchArea is empty.");
-				return new List<Point>();
-			}
-
-			// OPTIMIZATION: Use Dictionary for fast O(1) lookups instead of List O(n) searches
-			var candidatePixels = new Dictionary<Point, float>(); // Key: 2D Point, Value: signedDistance
-
-			int width = kinectManager.DepthWidth;
-			int height = kinectManager.DepthHeight;
-			
-			float minThresholdMeters = -0.002f; 
-			float maxThresholdMeters = (float)(PlaneThresholdSlider.Value / 1000.0);
-
-			// ENHANCED LOGGING: Comprehensive detection start info
-			LogToFile(GetDiagnosticPath(), $"DETECTION START: One-sided thresholding, range: {minThresholdMeters*1000:F1}mm to {maxThresholdMeters*1000:F1}mm");
-			LogToFile(GetDiagnosticPath(), $"DETECTION AREA: X={cachedDepthTouchArea.X:F1}, Y={cachedDepthTouchArea.Y:F1}, W={cachedDepthTouchArea.Width:F1}, H={cachedDepthTouchArea.Height:F1}");
-			LogToFile(GetDiagnosticPath(), $"PLANE EQUATION: N=({plane.Nx:F6}, {plane.Ny:F6}, {plane.Nz:F6}), D={plane.D:F6}");
-
-			// 1. Iterate through the depth pixels, but ONLY within the defined rectangular touch area.
-			int pixelsChecked = 0;
-			int validPixels = 0;
-			int candidatePixelsFound = 0;
-			int samplePointsLogged = 0;
-			var detectionStartTime = DateTime.Now;
-			
-			for (int y = (int)cachedDepthTouchArea.Top; y < (int)cachedDepthTouchArea.Bottom; y++)
-			{
-				for (int x = (int)cachedDepthTouchArea.Left; x < (int)cachedDepthTouchArea.Right; x++)
-				{
-					int index = y * width + x;
-					CameraSpacePoint csp = cameraSpacePoints[index];
-
-					if (float.IsInfinity(csp.X))
-						continue;
-
-					pixelsChecked++;
-					validPixels++;
-
-					float signedDistance = (float)((plane.Nx * csp.X) + (plane.Ny * csp.Y) + (plane.Nz * csp.Z) + plane.D);
-					float absoluteDistance = Math.Abs(signedDistance);
-
-					// ENHANCED LOGGING: Sample point analysis (first 10 points)
-					if (samplePointsLogged < 10)
-					{
-						LogToFile(GetDiagnosticPath(), $"SAMPLE POINT {samplePointsLogged + 1}:");
-						LogToFile(GetDiagnosticPath(), $" Position: ({csp.X:F3}, {csp.Y:F3}, {csp.Z:F3})");
-						LogToFile(GetDiagnosticPath(), $" Signed Distance: {signedDistance:F6}m");
-						LogToFile(GetDiagnosticPath(), $" Absolute Distance: {absoluteDistance:F6}m");
-						LogToFile(GetDiagnosticPath(), $" Threshold Check: {signedDistance:F6} > {minThresholdMeters:F6} = {signedDistance > minThresholdMeters}");
-						LogToFile(GetDiagnosticPath(), $" Range Check: {signedDistance:F6} < {maxThresholdMeters:F6} = {signedDistance < maxThresholdMeters}");
-						LogToFile(GetDiagnosticPath(), $" Detection Logic: signedDistance > minThresholdMeters AND signedDistance < maxThresholdMeters");
-						string result = (signedDistance > minThresholdMeters && signedDistance < maxThresholdMeters) ? "DETECTED" : "REJECTED";
-						LogToFile(GetDiagnosticPath(), $" FINAL RESULT: {result}");
-						samplePointsLogged++;
-					}
-
-					if (signedDistance > minThresholdMeters && signedDistance < maxThresholdMeters)
-					{
-						candidatePixels[new Point(x, y)] = signedDistance;
-						candidatePixelsFound++;
-					}
-				}
-			}
-
-			var detectionTime = DateTime.Now - detectionStartTime;
-			
-			// ENHANCED LOGGING: Comprehensive detection statistics
-			LogToFile(GetDiagnosticPath(), $"DETECTION STATS (comprehensive):");
-			LogToFile(GetDiagnosticPath(), $" Pixels Checked: {pixelsChecked}");
-			LogToFile(GetDiagnosticPath(), $" Valid Pixels: {validPixels}");
-			LogToFile(GetDiagnosticPath(), $" Candidate Pixels: {candidatePixelsFound}");
-			LogToFile(GetDiagnosticPath(), $" Detection Rate: {(validPixels > 0 ? (double)candidatePixelsFound/validPixels*100 : 0):F2}%");
-			LogToFile(GetDiagnosticPath(), $" Processing Time: {detectionTime.TotalMilliseconds:F2}ms");
-			LogToFile(GetDiagnosticPath(), $" Area Coverage: {cachedDepthTouchArea.Width * cachedDepthTouchArea.Height:F0} pixels");
-
-			if (candidatePixels.Count == 0)
-			{
-				LogToFile(GetDiagnosticPath(), "NO CANDIDATE PIXELS FOUND - returning empty result");
-				return new List<Point>();
-			}
-
-			// 2. Group the candidate pixels into blobs (clusters of adjacent pixels).
-			var blobStartTime = DateTime.Now;
-			var blobs = FindBlobs(candidatePixels.Keys.ToList());
-			var blobTime = DateTime.Now - blobStartTime;
-			var touchPoints = new List<Point>();
-
-			LogToFile(GetDiagnosticPath(), $"BLOB ANALYSIS: Found {blobs.Count} blobs in {blobTime.TotalMilliseconds:F2}ms");
-
-			// 3. For each blob, find the most likely touch point.
-			foreach (var blob in blobs)
-			{
-				LogToFile(GetDiagnosticPath(), $"BLOB EVALUATION: Area={blob.Count}, Min={MinBlobAreaSlider.Value}, Max={MaxBlobAreaSlider.Value}");
-				
-				if (blob.Count < MinBlobAreaSlider.Value || blob.Count > MaxBlobAreaSlider.Value)
-				{
-					LogToFile(GetDiagnosticPath(), $"BLOB REJECTED: Area={blob.Count} outside range [{MinBlobAreaSlider.Value}, {MaxBlobAreaSlider.Value}]");
-					continue;
-				}
-
-				Point? closestPoint = null;
-				float minPositiveDistance = float.MaxValue;
-
-				foreach (var pixel in blob)
-				{
-					float distance = candidatePixels[pixel];
-					
-					if (distance > 0 && distance < minPositiveDistance)
-					{
-						minPositiveDistance = distance;
-						closestPoint = pixel;
-					}
-				}
-				
-				if (closestPoint.HasValue)
-				{
-					touchPoints.Add(closestPoint.Value);
-					LogToFile(GetDiagnosticPath(), $"TOUCH DETECTED: Position=({closestPoint.Value.X:F1}, {closestPoint.Value.Y:F1}), Distance={minPositiveDistance*1000:F1}mm, BlobSize={blob.Count}");
-				}
-				else
-				{
-					LogToFile(GetDiagnosticPath(), $"BLOB REJECTED: No positive distance points found in blob of size {blob.Count}");
-				}
-			}
-
-			var totalTime = DateTime.Now - detectionStartTime;
-			LogToFile(GetDiagnosticPath(), $"FINAL RESULT: {touchPoints.Count} touches detected in {totalTime.TotalMilliseconds:F2}ms total");
-			
-			return touchPoints;
-		}
 
 		/// <summary>
 		/// A simple blob detection algorithm (Connected-component labeling).
@@ -1311,47 +1361,51 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var now = DateTime.Now;
 			var updated = new List<TouchPoint>();
 
-			// Update existing touches or add new ones
-			foreach (var touch in newTouches)
+			foreach (var p in newTouches)
 			{
-				var existingTouch = activeTouches.FirstOrDefault(t => 
-					Math.Abs(t.Position.X - touch.X) < 20 && 
-					Math.Abs(t.Position.Y - touch.Y) < 20);
+				var existing = activeTouches.FirstOrDefault(t =>
+					Math.Abs(t.Position.X - p.X) < 20 &&
+					Math.Abs(t.Position.Y - p.Y) < 20);
 
-				if (existingTouch != null)
+				if (existing != null)
 				{
-					// Update existing touch
-					existingTouch.Position = touch;
-					existingTouch.LastSeen = now;
-					existingTouch.SeenCount++;
-					updated.Add(existingTouch);
+					// EMA smoothing for stability
+					double a = Math.Max(0.05, Math.Min(0.9, smoothingAlpha));
+					existing.Position = new Point(
+						existing.Position.X * (1 - a) + p.X * a,
+						existing.Position.Y * (1 - a) + p.Y * a);
+					existing.LastSeen = now;
+					existing.SeenCount++;
+					updated.Add(existing);
 				}
 				else
 				{
-					// Add new touch
-					updated.Add(new TouchPoint 
-					{ 
-						Position = touch, 
-						LastSeen = now, 
-						Area = 1, 
-						Depth = 0, 
-						SeenCount = 1 
+					updated.Add(new TouchPoint
+					{
+						Position = p,
+						LastSeen = now,
+						Area = 1,
+						Depth = 0,
+						SeenCount = 1
 					});
 				}
 			}
 
-			// Remove expired touches
-			var expired = activeTouches.Where(t => (now - t.LastSeen).TotalMilliseconds > 500).ToList();
-			foreach (var touch in expired)
-			{
-				LogToFile(GetDiagnosticPath(), $"Removed expired touch at ({touch.Position.X:F1}, {touch.Position.Y:F1})");
-			}
-
-			activeTouches = updated.Where(t => (now - t.LastSeen).TotalMilliseconds <= 500).ToList();
+			// TTL and persistence
+			// Keep touches alive briefly; show only after 2 frames to reduce flicker
+			var alive = updated.Where(t => (now - t.LastSeen).TotalMilliseconds <= 250).ToList();
+			activeTouches = alive;
 		}
 
 		private void UpdateTouchVisuals(List<Point> touches)
 		{
+			// REFINEMENT NOTE: If scaling from depth coordinates to UI coordinates is needed,
+			// use explicit floating-point division for precision:
+			// double scaleX = depthCanvas.ActualWidth / 512.0;
+			// double scaleY = depthCanvas.ActualHeight / 424.0;
+			// var uiX = touchPoint.X * scaleX;
+			// var uiY = touchPoint.Y * scaleY;
+
 			// Clear existing touch visuals
 			var toRemove = OverlayCanvas.Children.OfType<Rectangle>().Where(r => r.Tag?.ToString() == "TouchVisual").ToList();
 			foreach (var rect in toRemove)
