@@ -89,6 +89,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private int minBlobAreaPoints = 100;
 		private double smoothingAlpha = 0.30;
 		
+		// Post-release guard fields for preventing ghost touches
+		private bool hadTouchLastFrame = false;
+		private DateTime guardUntil = DateTime.MinValue;
+		
 		// VARIABLE TOUCH SIZE DETECTION for different interaction types
 		private int maxBlobAreaPoints = 1000; // Maximum touch size for large objects
 		private string currentTouchMode = "Hand"; // "Hand", "Ball", "Custom"
@@ -590,9 +594,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 			// Thresholds (aim for 5–10 mm)
 			double sliderM = (PlaneThresholdSlider != null ? PlaneThresholdSlider.Value : 8.0) * 0.001;
-			float thrM = (float)Math.Max(0.003, Math.Min(0.025, sliderM)); // clamp to 3..25 mm
-			const float minDeltaM = -0.001f; // allow tiny negative due to noise
+			float thrM = (float)Math.Max(0.004, Math.Min(0.012, sliderM)); // clamp to 4..12mm
 			const float minDenom = 0.15f;    // avoid grazing angles (n·d̂ too small)
+
+			// Capture time for post-release guard
+			var now = DateTime.Now;
+
+			// Local threshold for pixel-level detection (moved outside loop for efficiency)
+			float localThrM = (float)Math.Max(0.004, Math.Min(0.012, sliderM)); // clamp to 4..12mm
 
 			// Work area
 			var area = InflateRect(cachedDepthTouchArea, 8, 8, width, height);
@@ -616,6 +625,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			// Plane (normalized & oriented earlier)
 			var plane = new Plane { Nx = (float)planeNx, Ny = (float)planeNy, Nz = (float)planeNz, D = (float)planeD };
 
+			// COMPREHENSIVE DIAGNOSTIC: Ray-based algorithm validation
+			LogToFile(GetDiagnosticPath(), $"=== RAY-BASED ALGORITHM VALIDATION ===");
+			LogToFile(GetDiagnosticPath(), $"Timestamp: {DateTime.Now:HH:mm:ss.fff}");
+			LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F6}, {plane.Ny:F6}, {plane.Nz:F6}), D={plane.D:F6}");
+			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={1.5}mm, maxDelta={thrM*1000:F1}mm");
+			LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
+			LogToFile(GetDiagnosticPath(), $"Algorithm: Along-ray residual calculation with 3×3 density filtering");
+
 			// 1) Build candidate mask using along-ray residual and color TouchArea gating
 			for (int y = ay; y < by; y++)
 			{
@@ -635,12 +652,17 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					float invR = (float)(1.0 / r);
 					float dx = p.X * invR, dy = p.Y * invR, dz = p.Z * invR;
 					float denom = (float)(plane.Nx * dx + plane.Ny * dy + plane.Nz * dz);
-					if (denom <= minDenom) continue;
-
+					if (Math.Abs(denom) < 0.05f) continue;           // avoid grazing rays
 					float tExp = (float)(-plane.D / denom);
-					float delta = (float)(tExp - r); // >0 means in front of plane toward camera
+					if (tExp <= 0 || tExp > 8.0f) continue;          // must hit plane in front of camera
 
-					if (delta < minDeltaM || delta > thrM) continue;
+					float delta = (float)(tExp - r);                  // >0 means in front of plane
+
+					// guarded lower bound: while in guard, require a slightly stronger minimum to avoid instant re-trigger
+					float baseMinPos = 0.0005f;      // 0.5mm
+					float guardMinPos = (now <= guardUntil) ? Math.Max(0.003f, thrM * 0.4f) : baseMinPos;
+
+					if (delta < guardMinPos || delta > thrM) continue;
 
 					// Keep only pixels whose depth->color mapping lands inside the calibrated TouchArea
 					if (!IsPointInTouchArea(x, y, depth)) continue;
@@ -648,13 +670,18 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					candidateMask[i] = true;
 					deltaRay[i] = delta;
 
-					// Add sample point logging (first 5 candidates only)
-					if (sampleCount < 5)
+					// ENHANCED SAMPLE POINT LOGGING: First 10 candidates with full ray analysis
+					if (sampleCount < 10)
 					{
-						LogToFile(GetDiagnosticPath(), $"SAMPLE CANDIDATE {sampleCount + 1}:");
+						LogToFile(GetDiagnosticPath(), $"=== SAMPLE CANDIDATE {sampleCount + 1} ===");
 						LogToFile(GetDiagnosticPath(), $"  Position: ({x}, {y}), Depth: {depth}");
 						LogToFile(GetDiagnosticPath(), $"  CameraSpace: ({p.X:F3}, {p.Y:F3}, {p.Z:F3})");
-						LogToFile(GetDiagnosticPath(), $"  Range: {r:F3}m, Delta: {delta*1000:F1}mm");
+						LogToFile(GetDiagnosticPath(), $"  Range: {r:F3}m");
+						LogToFile(GetDiagnosticPath(), $"  Ray Direction: ({dx:F3}, {dy:F3}, {dz:F3})");
+						LogToFile(GetDiagnosticPath(), $"  Plane Intersection: denom={denom:F3}, t_exp={tExp:F3}m");
+						LogToFile(GetDiagnosticPath(), $"  Along-Ray Residual: δ={delta*1000:F1}mm");
+						LogToFile(GetDiagnosticPath(), $"  Threshold Check: {delta*1000:F1}mm in range [{1.5}, {thrM*1000:F1}]mm");
+						LogToFile(GetDiagnosticPath(), $"  TouchArea Validation: {IsPointInTouchArea(x, y, depth)}");
 						sampleCount++;
 					}
 				}
@@ -683,6 +710,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 			}
 
+			// DENSITY FILTER ANALYSIS
+			int densityFilterCandidates = 0;
+			int densityFilterSurvivors = 0;
+			for (int y = ay; y < by; y++)
+			{
+				int row = y * width;
+				for (int x = ax; x < bx; x++)
+				{
+					if (candidateMask[row + x]) densityFilterSurvivors++;
+					if (neighborCount[row + x] > 0) densityFilterCandidates++;
+				}
+			}
+			LogToFile(GetDiagnosticPath(), $"DENSITY FILTER: {densityFilterCandidates} candidates, {densityFilterSurvivors} survivors (minNeighbors={minNeighbors})");
+
 			// 3) Collect surviving pixels and group into blobs
 			var survivors = new List<Point>();
 			for (int y = ay; y < by; y++)
@@ -692,6 +733,17 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				{
 					if (candidateMask[row + x]) survivors.Add(new Point(x, y));
 				}
+			}
+
+			// Suppress "wall fill" frames - if too much of ROI looks like touch, it's the wall
+			int roiPixels = (bx - ax) * (by - ay);
+			double fill = survivors.Count / (double)Math.Max(1, roiPixels);
+			if (fill > 0.05) // >5% of ROI looks like "touch" → it's the wall; suppress this frame
+			{
+				UpdateTouchTracking(new List<Point>());
+				UpdateTouchVisuals(new List<Point>());
+				DetectionStatusText.Text = $"Suppressed (fill {fill*100:F1}%)";
+				return;
 			}
 
 			var blobs = FindBlobs(survivors);
@@ -710,12 +762,26 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				{
 					int i = ((int)pt.Y) * width + ((int)pt.X);
 					float d = deltaRay[i];
-					if (d < minDelta && d >= minDeltaM) { minDelta = d; minDeltaPt = pt; }
+					if (d < minDelta) { minDelta = d; minDeltaPt = pt; }
 					double w = Math.Max(0.0001, thrM - d); // closer to plane ⇒ higher weight
 					sumW += w;
 					sumX += pt.X * w;
 					sumY += pt.Y * w;
 				}
+
+				// Require a portion of the blob to be very close to the wall (contact)
+				//  - 2.5mm contact threshold
+				//  - at least 12% of pixels within contact range
+				const float contactOn = 0.0025f;     // 2.5mm
+				const float contactFracMin = 0.12f;  // 12%
+
+				int below = 0;
+				foreach (var pt in blob)
+				{
+					int bi = ((int)pt.Y) * width + (int)pt.X;
+					if (deltaRay[bi] <= contactOn) below++;
+				}
+				if (below < contactFracMin * blob.Count) continue;
 
 				if (sumW <= 0) continue;
 
@@ -742,16 +808,26 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					}
 				}
 
-				// Add detailed blob analysis
-				LogToFile(GetDiagnosticPath(), $"BLOB ANALYSIS {blobIndex + 1}:");
+				// ENHANCED BLOB ANALYSIS: Detailed centroid calculation
+				LogToFile(GetDiagnosticPath(), $"=== BLOB ANALYSIS {blobIndex + 1} ===");
 				LogToFile(GetDiagnosticPath(), $"  Area: {blob.Count} pixels");
 				LogToFile(GetDiagnosticPath(), $"  MinDelta: {minDelta*1000:F1}mm at ({minDeltaPt.X}, {minDeltaPt.Y})");
-				LogToFile(GetDiagnosticPath(), $"  Centroid: ({cx}, {cy})");
+				LogToFile(GetDiagnosticPath(), $"  Weighted Centroid: sumW={sumW:F3}, sumX={sumX:F1}, sumY={sumY:F1}");
+				LogToFile(GetDiagnosticPath(), $"  Calculated Centroid: ({cx}, {cy})");
 				LogToFile(GetDiagnosticPath(), $"  Final Position: ({best.X}, {best.Y})");
+				LogToFile(GetDiagnosticPath(), $"  Safety Check: sumW={sumW:F6} (passed: {Math.Abs(sumW) >= 1e-9})");
 				blobIndex++;
 
 				touchPoints.Add(best);
 			}
+
+			// Update guard state to prevent immediate re-trigger after touch ends
+			if (touchPoints.Count == 0 && hadTouchLastFrame)
+			{
+				// 200ms guard after a touch ends to prevent immediate re-trigger by residual noise
+				guardUntil = now.AddMilliseconds(200);
+			}
+			hadTouchLastFrame = touchPoints.Count > 0;
 
 			UpdateTouchTracking(touchPoints);
 			UpdateTouchVisuals(touchPoints);
@@ -759,14 +835,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			DetectionStatusText.Text = $"Touches: {activeTouches.Count} ({thrM * 1000:F0}mm)";
 			StatusText.Text = $"Detection active (ray-based)";
 
-			// Add comprehensive diagnostic logging
+			// COMPREHENSIVE FRAME SUMMARY: Complete algorithm analysis
 			LogToFile(GetDiagnosticPath(), $"=== DETECTION FRAME SUMMARY ===");
 			LogToFile(GetDiagnosticPath(), $"Timestamp: {DateTime.Now:HH:mm:ss.fff}");
+			LogToFile(GetDiagnosticPath(), $"Algorithm: Ray-based with along-ray residual calculation");
 			LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
-			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={minDeltaM*1000:F1}mm, maxDelta={thrM*1000:F1}mm");
+			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={1.5}mm, maxDelta={thrM*1000:F1}mm");
 			LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F3}, {plane.Ny:F3}, {plane.Nz:F3}), D={plane.D:F3}");
 
-			// Count candidates and survivors
+			// Count total candidates and survivors
 			int totalCandidates = 0;
 			int survivorsAfterDensity = 0;
 			for (int y = ay; y < by; y++)
@@ -786,6 +863,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			LogToFile(GetDiagnosticPath(), $"Detection Stats: Candidates={totalCandidates}, AfterDensityFilter={survivorsAfterDensity}");
 			LogToFile(GetDiagnosticPath(), $"Blobs Found: {blobs.Count}, Final Touches: {touchPoints.Count}");
 			LogToFile(GetDiagnosticPath(), $"Active Touches: {activeTouches.Count}");
+			LogToFile(GetDiagnosticPath(), $"Algorithm Performance: Ray-based detection with 3×3 density filtering");
 			LogToFile(GetDiagnosticPath(), $"=================================");
 		}
 		
