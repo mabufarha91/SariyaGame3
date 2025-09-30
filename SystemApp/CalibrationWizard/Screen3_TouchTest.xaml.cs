@@ -17,6 +17,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 {
 	public partial class Screen3_TouchTest : Window
 	{
+		// Performance guard for diagnostics
+		private static readonly bool ENABLE_VERBOSE_DIAGNOSTICS = false; // Set to true only for debugging
+		
 		private KinectManager.KinectManager kinectManager;
 		private DispatcherTimer updateTimer;
 		private CalibrationConfig calibration;
@@ -706,12 +709,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var plane = new Plane { Nx = (float)planeNx, Ny = (float)planeNy, Nz = (float)planeNz, D = (float)planeD };
 
 			// COMPREHENSIVE DIAGNOSTIC: Ray-based algorithm validation
-			LogToFile(GetDiagnosticPath(), $"=== RAY-BASED ALGORITHM VALIDATION ===");
-			LogToFile(GetDiagnosticPath(), $"Timestamp: {DateTime.Now:HH:mm:ss.fff}");
-			LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F6}, {plane.Ny:F6}, {plane.Nz:F6}), D={plane.D:F6}");
-			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={guardMinPos*1000:F1}mm, maxDelta={thrM*1000:F1}mm");
-			LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
-			LogToFile(GetDiagnosticPath(), $"Algorithm: Along-ray residual calculation with 3×3 density filtering");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"=== RAY-BASED ALGORITHM VALIDATION ===");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Timestamp: {DateTime.Now:HH:mm:ss.fff}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F6}, {plane.Ny:F6}, {plane.Nz:F6}), D={plane.D:F6}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={guardMinPos*1000:F1}mm, maxDelta={thrM*1000:F1}mm");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Algorithm: Along-ray residual calculation with 3×3 density filtering");
 
 			// 1) Build candidate mask using along-ray residual and color TouchArea gating
 			for (int y = ay; y < by; y++)
@@ -761,20 +764,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					// ENHANCED SAMPLE POINT LOGGING: First 10 candidates with full ray analysis
 					if (sampleCount < 10)
 					{
-						LogToFile(GetDiagnosticPath(), $"=== SAMPLE CANDIDATE {sampleCount + 1} ===");
-						LogToFile(GetDiagnosticPath(), $"  Position: ({x}, {y}), Depth: {depth}");
-						LogToFile(GetDiagnosticPath(), $"  CameraSpace: ({p.X:F3}, {p.Y:F3}, {p.Z:F3})");
-						LogToFile(GetDiagnosticPath(), $"  Range: {r:F3}m");
-						LogToFile(GetDiagnosticPath(), $"  Ray Direction: ({dx:F3}, {dy:F3}, {dz:F3})");
-						LogToFile(GetDiagnosticPath(), $"  Plane Intersection: denom={denom:F3}, t_exp={tExp:F3}m");
-						LogToFile(GetDiagnosticPath(), $"  Along-Ray Residual: δ={delta*1000:F1}mm");
-						LogToFile(GetDiagnosticPath(), $"  Threshold Check: {delta*1000:F1}mm in range [{guardMinPos*1000:F1}, {thrM*1000:F1}]mm");
+						if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"=== SAMPLE CANDIDATE {sampleCount + 1} ===");
+						if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Position: ({x}, {y}), Depth: {depth}");
+						if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  CameraSpace: ({p.X:F3}, {p.Y:F3}, {p.Z:F3})");
+						if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Range: {r:F3}m");
+						if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Ray Direction: ({dx:F3}, {dy:F3}, {dz:F3})");
+						if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Plane Intersection: denom={denom:F3}, t_exp={tExp:F3}m");
+						if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Along-Ray Residual: δ={delta*1000:F1}mm");
+						if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Threshold Check: {delta*1000:F1}mm in range [{guardMinPos*1000:F1}, {thrM*1000:F1}]mm");
 						bool inArea = haveMap ? 
 							(!float.IsInfinity(d2c[i].X) && !float.IsInfinity(d2c[i].Y) && 
 							 d2c[i].X >= calibration.TouchArea.X && d2c[i].X <= calibration.TouchArea.Right &&
 							 d2c[i].Y >= calibration.TouchArea.Y && d2c[i].Y <= calibration.TouchArea.Bottom) :
 							IsPointInTouchArea(x, y, depth);
-						LogToFile(GetDiagnosticPath(), $"  TouchArea Validation: {inArea}");
+						if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  TouchArea Validation: {inArea}");
 						sampleCount++;
 					}
 				}
@@ -815,7 +818,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					if (neighborCount[row + x] > 0) densityFilterCandidates++;
 				}
 			}
-			LogToFile(GetDiagnosticPath(), $"DENSITY FILTER: {densityFilterCandidates} candidates, {densityFilterSurvivors} survivors (minNeighbors={minNeighbors})");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"DENSITY FILTER: {densityFilterCandidates} candidates, {densityFilterSurvivors} survivors (minNeighbors={minNeighbors})");
 
 			// Stronger denoise: 3×3 neighbor + morphological open + close
 			Open3x3(candidateMask, width, height, ax, ay, bx, by);
@@ -836,7 +839,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			var handPts = GetTrackedHandsDepthPixels(width, height);
 			if (useHandGate)
 			{
-				LogToFile(GetDiagnosticPath(), $"HAND GATE: ON, Hands={handPts.Count}, R={handGateRadiusPx:F0}px");
+				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"HAND GATE: ON, Hands={handPts.Count}, R={handGateRadiusPx:F0}px");
 			}
 
 			var blobs = FindBlobs(survivors);
@@ -919,13 +922,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 
 				// ENHANCED BLOB ANALYSIS: Detailed centroid calculation
-				LogToFile(GetDiagnosticPath(), $"=== BLOB ANALYSIS {blobIndex + 1} ===");
-				LogToFile(GetDiagnosticPath(), $"  Area: {blob.Count} pixels");
-				LogToFile(GetDiagnosticPath(), $"  MinDelta: {minDelta*1000:F1}mm at ({minDeltaPt.X}, {minDeltaPt.Y})");
-				LogToFile(GetDiagnosticPath(), $"  Weighted Centroid: sumW={sumW:F3}, sumX={sumX:F1}, sumY={sumY:F1}");
-				LogToFile(GetDiagnosticPath(), $"  Calculated Centroid: ({cx}, {cy})");
-				LogToFile(GetDiagnosticPath(), $"  Final Position: ({best.X}, {best.Y})");
-				LogToFile(GetDiagnosticPath(), $"  Safety Check: sumW={sumW:F6} (passed: {Math.Abs(sumW) >= 1e-9})");
+				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"=== BLOB ANALYSIS {blobIndex + 1} ===");
+				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Area: {blob.Count} pixels");
+				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  MinDelta: {minDelta*1000:F1}mm at ({minDeltaPt.X}, {minDeltaPt.Y})");
+				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Weighted Centroid: sumW={sumW:F3}, sumX={sumX:F1}, sumY={sumY:F1}");
+				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Calculated Centroid: ({cx}, {cy})");
+				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Final Position: ({best.X}, {best.Y})");
+				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Safety Check: sumW={sumW:F6} (passed: {Math.Abs(sumW) >= 1e-9})");
 				blobIndex++;
 
 				touchPoints.Add(best);
@@ -996,7 +999,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					}
 				}
 			}
-			LogToFile(GetDiagnosticPath(), $"HOLD ADDITIONS: {addedFromHold}, Final Touches (pre-guard): {touchPoints.Count}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"HOLD ADDITIONS: {addedFromHold}, Final Touches (pre-guard): {touchPoints.Count}");
 
 			// Update guard state to prevent immediate re-trigger after touch ends
 			if (touchPoints.Count == 0 && hadTouchLastFrame)
@@ -1013,12 +1016,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			StatusText.Text = $"Detection active (ray-based)";
 
 			// COMPREHENSIVE FRAME SUMMARY: Complete algorithm analysis
-			LogToFile(GetDiagnosticPath(), $"=== DETECTION FRAME SUMMARY ===");
-			LogToFile(GetDiagnosticPath(), $"Timestamp: {DateTime.Now:HH:mm:ss.fff}");
-			LogToFile(GetDiagnosticPath(), $"Algorithm: Ray-based with along-ray residual calculation");
-			LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
-			LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={guardMinPos*1000:F1}mm, maxDelta={thrM*1000:F1}mm");
-			LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F3}, {plane.Ny:F3}, {plane.Nz:F3}), D={plane.D:F3}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"=== DETECTION FRAME SUMMARY ===");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Timestamp: {DateTime.Now:HH:mm:ss.fff}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Algorithm: Ray-based with along-ray residual calculation");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={guardMinPos*1000:F1}mm, maxDelta={thrM*1000:F1}mm");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F3}, {plane.Ny:F3}, {plane.Nz:F3}), D={plane.D:F3}");
 
 			// Count total candidates and survivors
 			int totalCandidates = 0;
@@ -1037,11 +1040,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				if (candidateMask[i]) survivorsAfterDensity++;
 			}
 
-			LogToFile(GetDiagnosticPath(), $"Detection Stats: Candidates={totalCandidates}, AfterDensityFilter={survivorsAfterDensity}");
-			LogToFile(GetDiagnosticPath(), $"Blobs Found: {blobs.Count}, Final Touches: {touchPoints.Count}");
-			LogToFile(GetDiagnosticPath(), $"Active Touches: {activeTouches.Count}");
-			LogToFile(GetDiagnosticPath(), $"Algorithm Performance: Ray-based detection with 3×3 density filtering");
-			LogToFile(GetDiagnosticPath(), $"=================================");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Detection Stats: Candidates={totalCandidates}, AfterDensityFilter={survivorsAfterDensity}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Blobs Found: {blobs.Count}, Final Touches: {touchPoints.Count}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Active Touches: {activeTouches.Count}");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Algorithm Performance: Ray-based detection with 3×3 density filtering");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"=================================");
 		}
 		
 		// CORRECTED COORDINATE MAPPING METHOD
@@ -2634,23 +2637,112 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		}
 
 
-		private void Open3x3(bool[] mask,int w,int h,int ax,int ay,int bx,int by){bool[] tmp; Erode3x3(mask,w,h,ax,ay,bx,by,5, out tmp); Dilate3x3(tmp,out mask,w,h,ax,ay,bx,by);}
-		private void Close3x3(bool[] mask,int w,int h,int ax,int ay,int bx,int by){bool[] tmp; Dilate3x3(mask,out tmp,w,h,ax,ay,bx,by); Erode3x3(tmp,w,h,ax,ay,bx,by,5,out mask);}
-		private void Erode3x3(bool[] src,int w,int h,int ax,int ay,int bx,int by,int need,out bool[] dst){
-			dst=new bool[src.Length];
-			for(int y=ay+1;y<by-1;y++){int row=y*w;
-				for(int x=ax+1;x<bx-1;x++){int i=row+x; if(!src[i]){dst[i]=false;continue;}
-					int c=0; for(int yy=-1;yy<=1;yy++){int nrow=(y+yy)*w; for(int xx=-1;xx<=1;xx++) if(xx!=0||yy!=0) if(src[nrow+(x+xx)]) c++; }
-					dst[i]= c>=need;
-				}}
+		private void Open3x3(bool[] mask, int width, int height, int ax, int ay, int bx, int by)
+		{
+			// Use a temporary buffer for the operation
+			var tmp = new bool[mask.Length];
+			Array.Copy(mask, tmp, mask.Length);
+			
+			// Erode
+			for (int y = ay + 1; y < by - 1; y++)
+			{
+				int row = y * width;
+				for (int x = ax + 1; x < bx - 1; x++)
+				{
+					int i = row + x; 
+					if (!tmp[i]) { mask[i] = false; continue; }
+					
+					int count = 0;
+					for (int yy = -1; yy <= 1; yy++)
+					{
+						int nrow = (y + yy) * width;
+						for (int xx = -1; xx <= 1; xx++) 
+						{
+							if (xx != 0 || yy != 0) 
+								if (tmp[nrow + (x + xx)]) count++;
+						}
+					}
+					mask[i] = count >= 5; // Directly modify the original array
+				}
+			}
+			
+			// Dilate
+			for (int y = ay + 1; y < by - 1; y++)
+			{
+				int row = y * width;
+				for (int x = ax + 1; x < bx - 1; x++)
+				{
+					int i = row + x; 
+					if (!mask[i]) { tmp[i] = false; continue; }
+					
+					bool any = false;
+					for (int yy = -1; yy <= 1 && !any; yy++)
+					{
+						int nrow = (y + yy) * width;
+						for (int xx = -1; xx <= 1; xx++) 
+						{
+							if (tmp[nrow + (x + xx)]) { any = true; break; }
+						}
+					}
+					mask[i] = any; // Directly modify the original array
+				}
+			}
 		}
-		private void Dilate3x3(bool[] src,out bool[] dst,int w,int h,int ax,int ay,int bx,int by){
-			dst=new bool[src.Length];
-			for(int y=ay+1;y<by-1;y++){int row=y*w;
-				for(int x=ax+1;x<bx-1;x++){int i=row+x; bool any=false;
-					for(int yy=-1;yy<=1 && !any; yy++){int nrow=(y+yy)*w; for(int xx=-1;xx<=1;xx++) if(src[nrow+(x+xx)]){any=true;break;}}
-					dst[i]=any;
-				}}
+
+		private void Close3x3(bool[] mask, int width, int height, int ax, int ay, int bx, int by)
+		{
+			// Use a temporary buffer for the operation
+			var tmp = new bool[mask.Length];
+			Array.Copy(mask, tmp, mask.Length);
+			
+			// Dilate first
+			for (int y = ay + 1; y < by - 1; y++)
+			{
+				int row = y * width;
+				for (int x = ax + 1; x < bx - 1; x++)
+				{
+					int i = row + x; 
+					if (!tmp[i]) { mask[i] = false; continue; }
+					
+					bool any = false;
+					for (int yy = -1; yy <= 1 && !any; yy++)
+					{
+						int nrow = (y + yy) * width;
+						for (int xx = -1; xx <= 1; xx++) 
+						{
+							if (tmp[nrow + (x + xx)]) { any = true; break; }
+						}
+					}
+					mask[i] = any; // Directly modify the original array
+				}
+			}
+			
+			// Then erode
+			Array.Copy(mask, tmp, mask.Length);
+			for (int y = ay + 1; y < by - 1; y++)
+			{
+				int row = y * width;
+				for (int x = ax + 1; x < bx - 1; x++)
+				{
+					int i = row + x; 
+					if (!mask[i]) { tmp[i] = false; continue; }
+					
+					int count = 0;
+					for (int yy = -1; yy <= 1; yy++)
+					{
+						int nrow = (y + yy) * width;
+						for (int xx = -1; xx <= 1; xx++) 
+						{
+							if (xx != 0 || yy != 0) 
+								if (mask[nrow + (x + xx)]) count++;
+						}
+					}
+					tmp[i] = count >= 5;
+				}
+			}
+			
+			// Copy results back to original array
+			Array.Copy(tmp, mask, mask.Length);
 		}
 
 		private List<List<Point>> MergeCloseBlobs(List<List<Point>> blobs,int mergeDist){
