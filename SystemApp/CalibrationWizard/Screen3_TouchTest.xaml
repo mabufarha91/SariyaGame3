@@ -82,17 +82,30 @@
 					<!-- SIMPLE TOUCH DETECTION -->
 					<GroupBox Header="🎯 Touch Detection" Margin="0,0,0,20">
 						<StackPanel Margin="10">
-							<TextBlock Text="Touch Sensitivity (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
+							<TextBlock Text="Object Height (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
 							<StackPanel Orientation="Horizontal" Margin="0,2,0,0">
 								<Slider x:Name="PlaneThresholdSlider"
-								        Minimum="2" Maximum="25" Value="8"
+								        Minimum="3" Maximum="8" Value="6"
 								        TickFrequency="1" TickPlacement="None"
 								        ValueChanged="PlaneThresholdSlider_ValueChanged"
 								        Width="150" Margin="0,0,10,0"/>
-								<TextBlock x:Name="ThresholdValueText" Text="8mm" FontSize="11" Foreground="#333" 
+								<TextBlock x:Name="ThresholdValueText" Text="6mm" FontSize="11" Foreground="#333" 
 										   VerticalAlignment="Center" MinWidth="40"/>
 							</StackPanel>
 							<TextBlock Text="Maximum distance from wall for touch detection" 
+									   FontSize="10" Foreground="#666" Margin="0,0,0,10"/>
+							
+							<TextBlock Text="Plane Threshold (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
+							<StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+								<Slider x:Name="PlaneToleranceSlider"
+								        Minimum="1" Maximum="5" Value="1.5"
+								        TickFrequency="0.5" TickPlacement="None"
+								        ValueChanged="PlaneToleranceSlider_ValueChanged"
+								        Width="150" Margin="0,0,10,0"/>
+								<TextBlock x:Name="PlaneToleranceValueText" Text="1.5mm" FontSize="11" Foreground="#333" 
+										   VerticalAlignment="Center" MinWidth="40"/>
+							</StackPanel>
+							<TextBlock Text="Tolerance for plane detection" 
 									   FontSize="10" Foreground="#666" Margin="0,0,0,10"/>
 							
 							<TextBlock Text="🎯 One-sided touch detection active!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
@@ -124,9 +137,21 @@
 							
 							<GroupBox Header="Touch Settings" Margin="0,0,0,15">
 								<StackPanel Margin="10">
-									<TextBlock Text="Min Touch Size" FontWeight="Bold" Margin="0,0,0,5"/>
-									<Slider x:Name="MinBlobAreaSlider" Width="200" ValueChanged="MinBlobAreaSlider_ValueChanged"/>
-									<TextBlock x:Name="MinBlobAreaValueText" Text="50 pts" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
+									<TextBlock Text="Min Object Size" FontWeight="Bold" Margin="0,0,0,5"/>
+									<Slider x:Name="MinBlobAreaSlider"
+									        Minimum="30" Maximum="60" Value="45"
+									        TickFrequency="5" TickPlacement="None"
+									        ValueChanged="MinBlobAreaSlider_ValueChanged"
+									        Width="200"/>
+									<TextBlock x:Name="MinBlobAreaValueText" Text="45 pts" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
+									
+									<TextBlock Text="Max Object Size" FontWeight="Bold" Margin="0,10,0,5"/>
+									<Slider x:Name="MaxBlobAreaSlider"
+									        Minimum="200" Maximum="500" Value="200"
+									        TickFrequency="50" TickPlacement="None"
+									        ValueChanged="MaxBlobAreaSlider_ValueChanged"
+									        Width="200"/>
+									<TextBlock x:Name="MaxBlobAreaValueText" Text="200 pts" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
 									
 									<!-- Touch Mode Selection -->
 									<TextBlock Text="Touch Mode" FontWeight="Bold" Margin="0,10,0,5"/>

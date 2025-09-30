@@ -167,17 +167,38 @@ float dx = p.X * invR, dy = p.Y * invR, dz = p.Z * invR;
 
 // Step 3: Calculate expected range to plane intersection
 float denom = plane.Nx * dx + plane.Ny * dy + plane.Nz * dz;
+if (Math.Abs(denom) < 1e-3f) continue; // avoid grazing rays
 float tExp = (float)(-plane.D / denom);
 
 // Step 4: Calculate along-ray residual
 float delta = (float)(tExp - r); // >0 means in front of plane toward camera
 ```
 
+**User-Controlled Thresholds:**
+```csharp
+// Object Height (δ_max): User-controlled via PlaneThresholdSlider (3-8mm)
+double objMm = PlaneThresholdSlider != null ? PlaneThresholdSlider.Value : 6.0; // Updated default
+float thrM = (float)(objMm * 0.001);
+
+// Plane Tolerance (δ_min): User-controlled via PlaneToleranceSlider (1-5mm)
+double tolMm = PlaneToleranceSlider != null ? PlaneToleranceSlider.Value : 1.5; // Updated default
+float baseMinPos = (float)Math.Max(0.0008, Math.Min(0.0015, tolMm * 0.001)); // Fixed calculation
+
+// Guard threshold: Prevents re-triggering after touch ends
+float guardMinPos = (now <= guardUntil) ? Math.Min(0.0025f, baseMinPos + 0.0010f) : baseMinPos; // Updated guard
+
+// Contact detection threshold (must be > guardMinPos)
+const float contactOn = 0.0020f; // 2.0 mm
+// Safety enforcement to keep guardMinPos < contactOn
+if (guardMinPos >= contactOn) guardMinPos = Math.Max(0.0008f, contactOn - 0.0006f);
+```
+
 **Why this works:**
+- **User-controlled thresholds** allow fine-tuning for different environments
+- **Guard mechanism** prevents ghost touches after contact ends
 - **Uniform thresholds** across entire screen regardless of viewing angle
 - **Physically accurate** representation of touch detection
-- **Mathematically sound** foundation
-- **Environment-agnostic** operation
+- **Mathematically sound** foundation with proper edge case handling
 
 ### Detection Pipeline
 
@@ -187,18 +208,18 @@ float delta = (float)(tExp - r); // >0 means in front of plane toward camera
 if (r < 0.2 || r > 5.0) continue;
 
 // Check angle threshold (avoid grazing angles)
-if (denom <= minDenom) continue;
+if (Math.Abs(denom) < 1e-3f) continue;
 
-// Apply distance threshold
-if (delta < minDeltaM || delta > thrM) continue;
+// Apply user-controlled distance threshold
+if (delta < guardMinPos || delta > thrM) continue;
 
 // Validate against TouchArea
 if (!IsPointInTouchArea(x, y, depth)) continue;
 ```
 
-#### Stage 2: Density Filtering
+#### Stage 2: 3×3 Density Filtering
 ```csharp
-// 3×3 neighborhood check to remove speckle
+// Basic speckle noise removal
 const int minNeighbors = 4; // 4 of 8 neighbors required
 for (int yy = -1; yy <= 1; yy++) {
     for (int xx = -1; xx <= 1; xx++) {
@@ -209,29 +230,146 @@ if (count >= minNeighbors) neighborCount[i] = (byte)count;
 else candidateMask[i] = false;
 ```
 
-#### Stage 3: Blob Detection
+#### Stage 3: Morphological Opening (Open3x3)
+```csharp
+// Advanced noise removal - erode then dilate
+// Removes small noise clusters while preserving shape
+Open3x3(candidateMask, width, height, ax, ay, bx, by);
+```
+
+#### Stage 4: Morphological Closing (Close3x3)
+```csharp
+// Gap filling - dilate then erode
+// Fills small gaps between connected regions (fingers to palm)
+Close3x3(candidateMask, width, height, ax, ay, bx, by);
+```
+
+#### Stage 5: Blob Detection & Merging
 ```csharp
 // 8-way connected component labeling
 var blobs = FindBlobs(survivors);
+
+// Merge nearby blobs to prevent over-segmentation
+blobs = MergeCloseBlobs(blobs, 28); // 28px merge radius
 ```
 
-#### Stage 4: δ-Weighted Centroid
+#### Stage 6: Advanced Validation
+```csharp
+// Mean core distance check (≤3.0mm from wall)
+double meanCore = core.Average(pt => deltaRay[((int)pt.Y)*width+((int)pt.X)]);
+if (meanCore > 0.0030) continue;
+
+// Reject ultra-thin blobs (minimum 8px bounding box)
+int minX=(int)blob.Min(p=>p.X), maxX=(int)blob.Max(p=>p.X);
+int minY=(int)blob.Min(p=>p.Y), maxY=(int)blob.Max(p=>p.Y);
+if ((maxX-minX)<8 || (maxY-minY)<8) continue;
+```
+
+#### Stage 7: δ-Weighted Centroid & Core Border
 ```csharp
 // Sub-pixel accuracy calculation
 double w = Math.Max(0.0001, thrM - d); // closer to plane = higher weight
 sumW += w; sumX += pt.X * w; sumY += pt.Y * w;
-int cx = (int)Math.Round(sumX / sumW);
-int cy = (int)Math.Round(sumY / sumW);
+
+// Draw adaptive border around contact core only
+var core = new List<Point>();
+foreach (var pt in blob){
+    int bi=((int)pt.Y)*width+(int)pt.X;
+    if (deltaRay[bi] <= contactOn) core.Add(pt);
+}
+if (core.Count >= 3){
+    var hull = ConvexHull(core);
+    DrawContourBorder(hull, System.Windows.Media.Brushes.Red);
+}
 ```
 
-#### Stage 5: Temporal Smoothing
+#### Stage 8: Temporal Smoothing & State Management
 ```csharp
 // EMA smoothing for stable tracking
 double a = Math.Max(0.05, Math.Min(0.9, smoothingAlpha));
 existing.Position = new Point(
     existing.Position.X * (1 - a) + p.X * a,
     existing.Position.Y * (1 - a) + p.Y * a);
+
+// Frame-by-frame border clearing
+var oldBorders = OverlayCanvas.Children
+    .OfType<System.Windows.Shapes.Polygon>()
+    .Where(p => p.Tag?.ToString() == "ContourBorder")
+    .ToList();
+foreach (var poly in oldBorders) OverlayCanvas.Children.Remove(poly);
 ```
+
+### Advanced Morphological Operations
+
+#### Purpose
+The system uses advanced morphological operations to achieve superior noise reduction and object consolidation, preventing over-segmentation of hands into multiple touches.
+
+#### Open3x3 Operation (Erode then Dilate)
+```csharp
+private void Open3x3(bool[] mask,int w,int h,int ax,int ay,int bx,int by){
+    Erode3x3(mask,w,h,ax,ay,bx,by,5, out var tmp); 
+    Dilate3x3(tmp,mask,w,h,ax,ay,bx,by);
+}
+```
+**Effect:** Removes small noise clusters while preserving the overall shape of larger objects.
+
+#### Close3x3 Operation (Dilate then Erode)
+```csharp
+private void Close3x3(bool[] mask,int w,int h,int ax,int ay,int bx,int by){
+    Dilate3x3(mask,out var tmp,w,h,ax,ay,bx,by); 
+    Erode3x3(tmp,mask,w,h,ax,ay,bx,by,5);
+}
+```
+**Effect:** Fills small gaps between connected regions, merging fingers with palm into single coherent objects.
+
+#### Blob Merging Algorithm
+```csharp
+private List<List<Point>> MergeCloseBlobs(List<List<Point>> blobs,int mergeDist){
+    // Center-based merging algorithm
+    var centers = blobs.Select(b=> new Point(b.Average(p=>p.X), b.Average(p=>p.Y))).ToList();
+    // Merge blobs within mergeDist pixels of each other
+}
+```
+**Effect:** Prevents over-segmentation by merging nearby blobs (fingers + palm) into single touch points.
+
+#### Contact Core Detection
+```csharp
+// Extract only pixels very close to the wall (≤2.0mm)
+const float contactOn = 0.0020f;
+var core = new List<Point>();
+foreach (var pt in blob){
+    int bi=((int)pt.Y)*width+(int)pt.X;
+    if (deltaRay[bi] <= contactOn) core.Add(pt);
+}
+```
+**Effect:** Creates precise adaptive borders around only the actual contact area, not the entire detected object.
+
+### Border Management System
+
+#### Frame-by-Frame Border Clearing
+```csharp
+// Clear all borders every frame first (prevents "stuck" borders)
+var oldBorders = OverlayCanvas.Children
+    .OfType<System.Windows.Shapes.Polygon>()
+    .Where(p => p.Tag?.ToString() == "ContourBorder")
+    .ToList();
+foreach (var poly in oldBorders) OverlayCanvas.Children.Remove(poly);
+```
+
+#### Contact Core Border Drawing
+```csharp
+// Draw adaptive border only around contact core
+if (core.Count >= 3){
+    var hull = ConvexHull(core);
+    DrawContourBorder(hull, System.Windows.Media.Brushes.Red);
+}
+```
+
+#### Key Features
+- **Instant clearing**: Borders disappear immediately when contact ends
+- **Core-only visualization**: Only shows actual contact area, not entire object
+- **No fixed squares**: Eliminates static red squares completely
+- **Adaptive shapes**: Borders conform to actual contact geometry
 
 ### Coordinate System Consistency
 **CRITICAL:** Screen 3 applies horizontal flip to match Screen 2's coordinate system:
@@ -401,6 +539,26 @@ public class CalibrationConfig
 
 **Lesson:** Coordinate system consistency is CRITICAL across all screens.
 
+### ❌ FAILED APPROACH 6: INSUFFICIENT FILTERING PIPELINE
+**What we tried:** Using only basic 3×3 density filtering without advanced morphological operations
+**Why it failed:**
+- Could not handle complex noise patterns from Kinect sensors
+- Failed to merge over-segmented objects (fingers separated from palm)
+- Left scattered noise that created false positives
+- No solution for gaps between connected regions
+
+**Lesson:** Multi-stage filtering pipeline with morphological operations is essential for robust touch detection.
+
+### ❌ FAILED APPROACH 7: POOR STATE MANAGEMENT
+**What we tried:** No frame-by-frame border clearing and no guard mechanisms against ghost touches
+**Why it failed:**
+- Borders became "stuck" and remained visible after contact ended
+- Ghost touches appeared immediately after real touches ended
+- Inconsistent visual feedback between frames
+- No protection against residual noise re-triggering detection
+
+**Lesson:** Proper state management with guard mechanisms and frame-by-frame clearing is essential for clean, reliable touch detection.
+
 ---
 
 ## ✅ SUCCESSFUL SOLUTION - OFFICER'S RAY-BASED ARCHITECTURE
@@ -540,21 +698,110 @@ LogToFile(GetDiagnosticPath(), $"  Final Position: ({best.X}, {best.Y})");
 ## ⚙️ CONFIGURATION & TUNING
 
 ### Optimal Threshold Settings
+
+#### User-Controlled Thresholds
 ```csharp
-// Thresholds (aim for 5–10 mm effective detection)
-double sliderM = (PlaneThresholdSlider != null ? PlaneThresholdSlider.Value : 8.0) * 0.001;
-float thrM = (float)Math.Max(0.003, Math.Min(0.025, sliderM)); // clamp to 3..25 mm
-const float minDeltaM = -0.001f; // allow tiny negative due to noise
-const float minDenom = 0.15f;    // avoid grazing angles (n·d̂ too small)
+// Object Height (δ_max): Maximum distance from wall for detection
+// Range: 3-8mm (PlaneThresholdSlider)
+double objMm = PlaneThresholdSlider != null ? PlaneThresholdSlider.Value : 6.0; // Updated default
+float thrM = (float)(objMm * 0.001);
+
+// Plane Tolerance (δ_min): Minimum distance to avoid noise
+// Range: 1-5mm (PlaneToleranceSlider)  
+double tolMm = PlaneToleranceSlider != null ? PlaneToleranceSlider.Value : 1.5; // Updated default
+float baseMinPos = (float)Math.Max(0.0008, Math.Min(0.0015, tolMm * 0.001)); // Fixed calculation
+
+// Guard threshold: Prevents re-triggering after touch ends
+float guardMinPos = (now <= guardUntil) ? Math.Min(0.0025f, baseMinPos + 0.0010f) : baseMinPos; // Updated guard
+
+// Contact detection threshold (must be > guardMinPos)
+const float contactOn = 0.0020f; // 2.0 mm
+// Safety enforcement to keep guardMinPos < contactOn
+if (guardMinPos >= contactOn) guardMinPos = Math.Max(0.0008f, contactOn - 0.0006f);
 ```
+
+#### Advanced Validation Parameters
+```csharp
+// Contact detection: Only pixels ≤2.0mm from wall
+const float contactOn = 0.0020f;
+
+// Contact fraction validation: At least 18% of blob pixels must be within contact range
+const float contactFracMin = 0.18f; // 18% (was 25%)
+int below = 0;
+foreach (var pt in blob) {
+    int bi = ((int)pt.Y) * width + (int)pt.X;
+    if (deltaRay[bi] <= contactOn) below++;
+}
+if (below < contactFracMin * blob.Count) continue;
+
+// Mean core distance: Blob average must be ≤3.0mm from wall
+if (meanCore > 0.0030) continue;
+
+// Bounding box: Minimum 8px in each dimension
+if ((maxX-minX)<8 || (maxY-minY)<8) continue;
+
+// Fill suppression: Reject frames with >12% fill (wall noise)
+if (fill > 0.12) { /* hard reset state */ return; }
+```
+
+#### Critical Mathematical Fix
+**Problem Solved:** The original threshold logic created a mathematical contradiction where:
+- Per-pixel gate rejected all pixels < 2.0mm
+- Contact core required pixels ≤ 2.0mm
+- Result: Empty contact core → no touches detected
+
+**Solution Implemented:**
+```csharp
+// δ_min must be below contactOn; use ≤1.0–1.5mm typically
+float baseMinPos = (float)Math.Max(0.0008, Math.Min(0.0015, tolMm * 0.001));
+
+// brief guard adds ~1.0mm, capped to keep below contactOn
+float guardMinPos = (now <= guardUntil) ? Math.Min(0.0025f, baseMinPos + 0.0010f) : baseMinPos;
+
+// Safety enforcement
+if (guardMinPos >= contactOn) guardMinPos = Math.Max(0.0008f, contactOn - 0.0006f);
+```
+
+**Mathematical Logic:**
+- Per-pixel gate: 1.0-1.5mm ≤ delta ≤ 6.0mm ✅
+- Contact core: delta ≤ 2.0mm ✅
+- Result: Pixels 1.0-2.0mm pass gate AND qualify for core ✅
+
+#### Recommended Initial Settings
+- **Object Height**: 6mm (good balance for hands and objects at 30cm)
+- **Plane Tolerance**: 1.0-1.5mm (eliminates noise while preserving detection)
+- **Min Object Size**: 40-50px (finger touch minimum)
+- **Max Object Size**: 200px (prevents arm detection)
 
 ### UI Slider Configuration
 ```xml
+<!-- Object Height: Maximum distance from wall for detection -->
 <Slider x:Name="PlaneThresholdSlider"
-        Minimum="2" Maximum="25" Value="8"
+        Minimum="3" Maximum="8" Value="6"
         TickFrequency="1" TickPlacement="None"
         ValueChanged="PlaneThresholdSlider_ValueChanged"
         Width="150" Margin="0,0,10,0"/>
+
+<!-- Plane Tolerance: Minimum distance to avoid noise -->
+<Slider x:Name="PlaneToleranceSlider"
+        Minimum="1" Maximum="5" Value="1.5"
+        TickFrequency="0.5" TickPlacement="None"
+        ValueChanged="PlaneToleranceSlider_ValueChanged"
+        Width="150" Margin="0,0,10,0"/>
+
+<!-- Min Object Size: Minimum blob area for detection -->
+<Slider x:Name="MinBlobAreaSlider"
+        Minimum="30" Maximum="60" Value="45"
+        TickFrequency="5" TickPlacement="None"
+        ValueChanged="MinBlobAreaSlider_ValueChanged"
+        Width="200"/>
+
+<!-- Max Object Size: Maximum blob area to prevent arm detection -->
+<Slider x:Name="MaxBlobAreaSlider"
+        Minimum="200" Maximum="500" Value="200"
+        TickFrequency="50" TickPlacement="None"
+        ValueChanged="MaxBlobAreaSlider_ValueChanged"
+        Width="200"/>
 ```
 
 ### Blob Size Settings

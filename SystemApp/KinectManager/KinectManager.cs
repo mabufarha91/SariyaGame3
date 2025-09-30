@@ -592,6 +592,23 @@ namespace KinectCalibrationWPF.KinectManager
             }
         }
 
+        public bool TryGetDepthToColorMapSnapshot(out ColorSpacePoint[] map, out int width, out int height)
+        {
+            map = null;
+            width = depthWidth;
+            height = depthHeight;
+            if (!IsInitialized || kinectSensor == null || depthWidth <= 0 || depthHeight <= 0)
+                return false;
+            lock (depthDataLock)
+            {
+                if (depthToColorPoints == null || depthToColorPoints.Length == 0)
+                    return false;
+                map = new ColorSpacePoint[depthToColorPoints.Length];
+                Array.Copy(depthToColorPoints, map, depthToColorPoints.Length);
+                return true;
+            }
+        }
+
         public bool TryMapColorPixelToCameraSpace(int colorX, int colorY, out CameraSpacePoint cameraPoint)
         {
             cameraPoint = new CameraSpacePoint { X = float.NaN, Y = float.NaN, Z = float.NaN };

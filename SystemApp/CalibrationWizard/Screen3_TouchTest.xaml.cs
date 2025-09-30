@@ -56,9 +56,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		// Simple detection mode and heatmap
 		private bool showHeatmap = false;         // Toggleable heatmap overlay
 		private WriteableBitmap heatmapBitmap;    // Reused heatmap buffer
+		private bool showTouchSquares = false;
 		
 		// Max blob area slider (for UI)
-		private Slider MaxBlobAreaSlider { get; set; }
 		
 		private class TouchPoint
 		{
@@ -104,9 +104,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private string currentTouchMode = "Hand"; // "Hand", "Ball", "Custom"
 		private Dictionary<string, int> touchModeSettings = new Dictionary<string, int>
 		{
-			{ "Hand", 50 },       // Better default for finger touches
+			{ "Hand", 45 },       // Officer recommendation: 30-60 pixels, default 45
 			{ "Ball", 200 },      // Medium touches for balls
-			{ "Custom", 50 }      // Custom setting
+			{ "Custom", 45 }      // Custom setting with recommended default
 		};
 
 		public Screen3_TouchTest(KinectManager.KinectManager manager, CalibrationConfig config)
@@ -257,12 +257,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				if (PlaneThresholdSlider != null)
 				{
-					// Sensitivity in millimeters (UI)
-					PlaneThresholdSlider.Minimum = 2;   // 2mm min
-					PlaneThresholdSlider.Maximum = 25;  // 25mm max
+					// Object Height (δ_max): 3-8 mm
+					PlaneThresholdSlider.Minimum = 3;
+					PlaneThresholdSlider.Maximum = 8;
 					if (PlaneThresholdSlider.Value < PlaneThresholdSlider.Minimum || PlaneThresholdSlider.Value > PlaneThresholdSlider.Maximum)
 					{
-						PlaneThresholdSlider.Value = 8; // default 8mm
+						PlaneThresholdSlider.Value = 5; // default 5mm
 					}
 					
 					LogToFile(GetDiagnosticPath(), $"Threshold slider: {PlaneThresholdSlider.Value}mm (range: {PlaneThresholdSlider.Minimum}-{PlaneThresholdSlider.Maximum}mm)");
@@ -270,14 +270,35 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				
 				if (MinBlobAreaSlider != null)
 				{
-					MinBlobAreaSlider.Minimum = 5;
-					MinBlobAreaSlider.Maximum = 1000; // Increased for large objects like balls
-					MinBlobAreaSlider.Value = touchModeSettings[currentTouchMode];
+					// Min Object Size: 30-60 pixels (officer recommendation)
+					MinBlobAreaSlider.Minimum = 30;
+					MinBlobAreaSlider.Maximum = 60;
+					if (MinBlobAreaSlider.Value < MinBlobAreaSlider.Minimum || MinBlobAreaSlider.Value > MinBlobAreaSlider.Maximum)
+					{
+						MinBlobAreaSlider.Value = 45; // default 45 pixels
+					}
 					UpdateTouchSizeDisplay();
+					LogToFile(GetDiagnosticPath(), $"Min Blob Area slider: {MinBlobAreaSlider.Value} pixels (range: {MinBlobAreaSlider.Minimum}-{MinBlobAreaSlider.Maximum} pixels)");
 				}
-				
-				// Initialize MaxBlobAreaSlider with a reasonable default
-				MaxBlobAreaSlider = new Slider { Minimum = 100, Maximum = 10000, Value = 5000 };
+
+				if (MaxBlobAreaSlider != null)
+				{
+					// Max Object Size: large enough for palms/balls (officer recommendation)
+					// Values are now set in XAML, just log the current state
+					maxBlobAreaPoints = (int)MaxBlobAreaSlider.Value;
+					LogToFile(GetDiagnosticPath(), $"Max Blob Area slider: {MaxBlobAreaSlider.Value} pixels (range: {MaxBlobAreaSlider.Minimum}-{MaxBlobAreaSlider.Maximum} pixels)");
+				}
+
+				if (PlaneToleranceSlider != null)
+				{
+					PlaneToleranceSlider.Minimum = 1;
+					PlaneToleranceSlider.Maximum = 5;
+					if (PlaneToleranceSlider.Value < PlaneToleranceSlider.Minimum || PlaneToleranceSlider.Value > PlaneToleranceSlider.Maximum)
+					{
+						PlaneToleranceSlider.Value = 2; // Default plane tolerance
+					}
+					LogToFile(GetDiagnosticPath(), $"Plane Tolerance slider: {PlaneToleranceSlider.Value}mm (range: {PlaneToleranceSlider.Minimum}-{PlaneToleranceSlider.Maximum}mm)");
+				}
 				
 				
 				LogToFile(GetDiagnosticPath(), "Sliders initialized successfully");
@@ -392,41 +413,66 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					depthPixels = new byte[width * height * 4];
 				}
 				
-				// Use fixed depth range for visualization (no longer dependent on wall distance)
-				double minDepth = 0.5; // 50cm minimum
-				double maxDepth = 4.0; // 4m maximum
+				// Delta-to-plane visualization with narrow window (0-8mm in front of wall)
+				CameraSpacePoint[] cameraSpacePoints;
+				if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out int cspWidth, out int cspHeight))
+				{
+					StatusText.Text = "No camera space data available";
+					return;
+				}
+
+				// Create plane for delta calculation
+				var plane = new Plane { Nx = (float)planeNx, Ny = (float)planeNy, Nz = (float)planeNz, D = (float)planeD };
 				
-				// Pre-calculate thresholds for faster processing
-				ushort minDepthRaw = (ushort)(minDepth * 1000);
-				ushort maxDepthRaw = (ushort)(maxDepth * 1000);
+				// Delta visualization parameters (use sliders directly)
+				float maxDelta = (float)((PlaneThresholdSlider?.Value ?? 6.0) * 0.001f);
+				float minDelta = (float)((PlaneToleranceSlider?.Value ?? 1.5) * 0.001f);
+				if (minDelta < 0f) minDelta = 0f;
+				if (minDelta > maxDelta) minDelta = Math.Max(0f, maxDelta * 0.5f);
 				
-				// Optimized pixel processing with reduced calculations
+				// Process pixels for delta visualization
 				for (int i = 0; i < depthData.Length; i++)
 				{
 					ushort depth = depthData[i];
-					byte intensity = 0;
+					byte intensity = 0; // Default to black
 					
-					if (depth != 0)
+					if (depth != 0 && i < cameraSpacePoints.Length)
 					{
-						// Fast depth range check
-						if (depth < minDepthRaw)
-							intensity = 255; // Very close = white
-						else if (depth > maxDepthRaw)
-							intensity = 0; // Far = black
-						else
+						var p = cameraSpacePoints[i];
+						if (!float.IsInfinity(p.X) && !float.IsInfinity(p.Y) && !float.IsInfinity(p.Z))
 						{
-							// Simplified intensity calculation
-							double depthInMeters = depth / 1000.0;
-							double normalized = (depthInMeters - minDepth) / (maxDepth - minDepth);
-							intensity = (byte)(255 * (1.0 - normalized));
+							double r = Math.Sqrt(p.X * p.X + p.Y * p.Y + p.Z * p.Z);
+							if (r > 0.2 && r < 5.0)
+							{
+								float invR = (float)(1.0 / r);
+								float dx = p.X * invR, dy = p.Y * invR, dz = p.Z * invR;
+								float denom = (float)(plane.Nx * dx + plane.Ny * dy + plane.Nz * dz);
+								
+								if (Math.Abs(denom) >= 0.05f)
+								{
+									float tExp = (float)(-plane.D / denom);
+									if (tExp > 0 && tExp <= 8.0f)
+									{
+										float delta = (float)(tExp - r); // >0 means in front of plane
+										
+										// Only show pixels 0-8mm in front of wall
+										if (delta >= minDelta && delta <= maxDelta)
+										{
+											// Map delta to intensity (closer to wall = brighter)
+											float normalized = delta / maxDelta;
+											intensity = (byte)(255 * (1.0f - normalized)); // Inverted so closer = brighter
+										}
+									}
+								}
+							}
 						}
-						
-							// Proper grayscale mapping (BGR format)
-							depthPixels[i * 4] = intensity;     // Blue
-							depthPixels[i * 4 + 1] = intensity; // Green
-							depthPixels[i * 4 + 2] = intensity; // Red
-							depthPixels[i * 4 + 3] = 255;       // Alpha
 					}
+					
+					// Set grayscale pixel (BGR format)
+					depthPixels[i * 4] = intensity;     // Blue
+					depthPixels[i * 4 + 1] = intensity; // Green
+					depthPixels[i * 4 + 2] = intensity; // Red
+					depthPixels[i * 4 + 3] = 255;       // Alpha
 				}
 				
 				// Update pixels in existing bitmap
@@ -569,6 +615,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		
 		private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 		{
+			// Get depth-to-color map snapshot once per frame (performance fix)
+			ColorSpacePoint[] d2c;
+			int dw, dh;
+			bool haveMap = kinectManager.TryGetDepthToColorMapSnapshot(out d2c, out dw, out dh);
+
 			framesSinceStart++;
 			if (framesSinceStart <= warmupFrames)
 			{
@@ -578,25 +629,32 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				return;
 			}
 
+			// Clear all borders every frame first (prevents "stuck" borders)
+			var oldBorders = OverlayCanvas.Children
+				.OfType<System.Windows.Shapes.Polygon>()
+				.Where(p => p.Tag?.ToString() == "ContourBorder")
+				.ToList();
+			foreach (var poly in oldBorders) OverlayCanvas.Children.Remove(poly);
+
 			// Reset diagnostic counters for this frame
 			sampleCount = 0;
 			blobIndex = 0;
 
 			// Validate prerequisites
-			if (!isPlaneValid || calibration?.TouchArea == null)
-			{
+				if (!isPlaneValid || calibration?.TouchArea == null)
+				{
 				LogToFile(GetDiagnosticPath(), "WARNING: Invalid plane or touch area");
-				return;
-			}
+						return;
+				}
 
 			// Camera space for this frame
-			CameraSpacePoint[] cameraSpacePoints;
-			int depthWidth, depthHeight;
-			if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out depthWidth, out depthHeight))
-			{
+				CameraSpacePoint[] cameraSpacePoints;
+				int depthWidth, depthHeight;
+				if (!kinectManager.TryGetCameraSpaceFrame(out cameraSpacePoints, out depthWidth, out depthHeight))
+				{
 				LogToFile(GetDiagnosticPath(), "WARNING: Camera space frame failed, skipping detection");
-				return;
-			}
+					return;
+				}
 
 			// Allocate reusable buffers
 			int len = width * height;
@@ -607,16 +665,23 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				neighborCount = new byte[len];
 			}
 
-			// Thresholds (aim for 5–10 mm)
-			double sliderM = (PlaneThresholdSlider != null ? PlaneThresholdSlider.Value : 8.0) * 0.001;
-			float thrM = (float)Math.Max(0.004, Math.Min(0.012, sliderM)); // clamp to 4..12mm
+			// Slider values (mm → m)
+			double objMm = PlaneThresholdSlider != null ? PlaneThresholdSlider.Value : 6.0; // 3..8mm
+			double tolMm = PlaneToleranceSlider != null ? PlaneToleranceSlider.Value : 1.5; // 1..5mm
 
-			// Capture time for post-release guard
+			float thrM = (float)(objMm * 0.001);  // δ_max
+
 			var now = DateTime.Now;
 
-			// Lower bound: 0.8 mm normally; 3.5 mm during 200 ms guard
-			float baseMinPos = 0.0008f;
-			float guardMinPos = (now <= guardUntil) ? Math.Max(0.0035f, thrM * 0.5f) : baseMinPos;
+			// δ_min must be below contactOn; use ≤1.0–1.5mm typically
+			float baseMinPos = (float)Math.Max(0.0008, Math.Min(0.0015, tolMm * 0.001));
+			// brief guard adds ~1.0mm, capped to keep below contactOn
+			float guardMinPos = (now <= guardUntil) ? Math.Min(0.0025f, baseMinPos + 0.0010f) : baseMinPos;
+
+			// Contact detection threshold (must be > guardMinPos)
+			const float contactOn = 0.0020f;   // 2.0 mm
+			// Add safety to enforce guardMinPos < contactOn once per frame
+			if (guardMinPos >= contactOn) guardMinPos = Math.Max(0.0008f, contactOn - 0.0006f);
 
 			// Work area
 			var area = InflateRect(cachedDepthTouchArea, 8, 8, width, height);
@@ -676,8 +741,19 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 					if (delta < guardMinPos || delta > thrM) continue;
 
-					// Keep only pixels whose depth->color mapping lands inside the calibrated TouchArea
-					if (!IsPointInTouchArea(x, y, depth)) continue;
+					// Replace expensive IsPointInTouchArea() call with direct array lookup
+					if (haveMap)
+					{
+						var cp = d2c[i];
+						if (float.IsInfinity(cp.X) || float.IsInfinity(cp.Y)) continue;
+						var ta = calibration.TouchArea;
+						if (!(cp.X >= ta.X && cp.X <= ta.Right && cp.Y >= ta.Y && cp.Y <= ta.Bottom)) continue;
+					}
+					else
+					{
+						// Fallback to original method if map not available
+						if (!IsPointInTouchArea(x, y, depth)) continue;
+					}
 
 					candidateMask[i] = true;
 					deltaRay[i] = delta;
@@ -693,7 +769,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 						LogToFile(GetDiagnosticPath(), $"  Plane Intersection: denom={denom:F3}, t_exp={tExp:F3}m");
 						LogToFile(GetDiagnosticPath(), $"  Along-Ray Residual: δ={delta*1000:F1}mm");
 						LogToFile(GetDiagnosticPath(), $"  Threshold Check: {delta*1000:F1}mm in range [{guardMinPos*1000:F1}, {thrM*1000:F1}]mm");
-						LogToFile(GetDiagnosticPath(), $"  TouchArea Validation: {IsPointInTouchArea(x, y, depth)}");
+						bool inArea = haveMap ? 
+							(!float.IsInfinity(d2c[i].X) && !float.IsInfinity(d2c[i].Y) && 
+							 d2c[i].X >= calibration.TouchArea.X && d2c[i].X <= calibration.TouchArea.Right &&
+							 d2c[i].Y >= calibration.TouchArea.Y && d2c[i].Y <= calibration.TouchArea.Bottom) :
+							IsPointInTouchArea(x, y, depth);
+						LogToFile(GetDiagnosticPath(), $"  TouchArea Validation: {inArea}");
 						sampleCount++;
 					}
 				}
@@ -736,6 +817,10 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			LogToFile(GetDiagnosticPath(), $"DENSITY FILTER: {densityFilterCandidates} candidates, {densityFilterSurvivors} survivors (minNeighbors={minNeighbors})");
 
+			// Stronger denoise: 3×3 neighbor + morphological open + close
+			Open3x3(candidateMask, width, height, ax, ay, bx, by);
+			Close3x3(candidateMask, width, height, ax, ay, bx, by);
+
 			// 3) Collect surviving pixels and group into blobs
 			var survivors = new List<Point>();
 			for (int y = ay; y < by; y++)
@@ -754,18 +839,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(GetDiagnosticPath(), $"HAND GATE: ON, Hands={handPts.Count}, R={handGateRadiusPx:F0}px");
 			}
 
-			// Suppress "wall fill" frames - if too much of ROI looks like touch, it's the wall
-			int roiPixels = (bx - ax) * (by - ay);
-			double fill = survivors.Count / (double)Math.Max(1, roiPixels);
-			if (fill > 0.04) // >4% of ROI → it's the wall; suppress this frame
-			{
-				UpdateTouchTracking(new List<Point>());
-				UpdateTouchVisuals(new List<Point>());
-				DetectionStatusText.Text = $"Suppressed (fill {fill*100:F1}%)";
-				return;
-			}
-
 			var blobs = FindBlobs(survivors);
+			blobs = MergeCloseBlobs(blobs, 28); // px radius to merge clusters (was 30)
 			var touchPoints = new List<Point>();
 
 			foreach (var blob in blobs)
@@ -788,21 +863,37 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					sumY += pt.Y * w;
 				}
 
-				// Require a portion of the blob to be very close to the wall (contact)
-				//  - 2.0mm contact threshold
-				//  - at least 10% of pixels within contact range
-				const float contactOn = 0.0020f;   // 2.0 mm
-				const float contactFracMin = 0.10f;  // 10%
+				if (sumW <= 0) continue;
 
+				// core = only pixels at or below contactOn
+				var core = new List<Point>();
+				foreach (var pt in blob){
+					int bi=((int)pt.Y)*width+(int)pt.X;
+					if (deltaRay[bi] <= contactOn) core.Add(pt);
+				}
+
+				// ADD THIS MISSING LOGIC:
+				// Require at least 18% of blob pixels to be within contact range
+				const float contactFracMin = 0.18f; // 18% (was 25%)
 				int below = 0;
-				foreach (var pt in blob)
-				{
+				foreach (var pt in blob) {
 					int bi = ((int)pt.Y) * width + (int)pt.X;
 					if (deltaRay[bi] <= contactOn) below++;
 				}
 				if (below < contactFracMin * blob.Count) continue;
 
-				if (sumW <= 0) continue;
+				// mean δ of core ≤ 3.0mm
+				double meanCore = core.Average(pt => deltaRay[((int)pt.Y)*width+((int)pt.X)]);
+				if (meanCore > 0.0030) continue;
+				// reject ultra-thin blobs
+				int minX=(int)blob.Min(p=>p.X), maxX=(int)blob.Max(p=>p.X);
+				int minY=(int)blob.Min(p=>p.Y), maxY=(int)blob.Max(p=>p.Y);
+				if ((maxX-minX)<8 || (maxY-minY)<8) continue;
+
+				if (core.Count >= 3){
+					var hull = ConvexHull(core);
+					DrawContourBorder(hull, System.Windows.Media.Brushes.Red); // Tag = "ContourBorder"
+				}
 
 				// ADD SAFETY CHECK:
 				if (Math.Abs(sumW) < 1e-9) continue; // Prevent division by zero
@@ -837,6 +928,8 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(GetDiagnosticPath(), $"  Safety Check: sumW={sumW:F6} (passed: {Math.Abs(sumW) >= 1e-9})");
 				blobIndex++;
 
+				touchPoints.Add(best);
+
 				// Hand proximity gate (only if enabled)
 				if (useHandGate)
 				{
@@ -849,8 +942,16 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					}
 					if (!nearHand) continue;
 				}
+			}
 
-				touchPoints.Add(best);
+			// Suppress frames with broad residuals but no accepted contact; hard reset state
+			int roiPixels = (bx-ax)*(by-ay);
+			double fill = survivors.Count / (double)Math.Max(1, roiPixels);
+			if (fill > 0.12){ // 12%
+				activeTouches.Clear();
+				hadTouchLastFrame = false;
+				DetectionStatusText.Text = $"Suppressed (fill {fill*100:F1}%)";
+				return;
 			}
 
 			// Hold touches persisting under 4mm even if blob breaks
@@ -1011,7 +1112,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private void MinBlobAreaSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
 		{
 			try
-			{
+		{
 				minBlobAreaPoints = (int)e.NewValue;
 
 				// FINAL FIX: The hard-coded clamp has been REMOVED
@@ -1031,6 +1132,42 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
+		private void MaxBlobAreaSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		{
+			try
+			{
+				maxBlobAreaPoints = (int)e.NewValue;
+				
+				// Update display text to show current value
+				if (MaxBlobAreaValueText != null)
+				{
+					MaxBlobAreaValueText.Text = $"{maxBlobAreaPoints} pts";
+				}
+				
+				LogToFile(GetDiagnosticPath(), $"Max blob area changed to: {maxBlobAreaPoints} pixels");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in MaxBlobAreaSlider_ValueChanged: {ex.Message}");
+			}
+		}
+		
+		private void PlaneToleranceSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+		{
+			try
+			{
+				if (PlaneToleranceValueText != null)
+				{
+					PlaneToleranceValueText.Text = $"{e.NewValue:F1}mm";
+				}
+				LogToFile(GetDiagnosticPath(), $"Plane tolerance changed to: {e.NewValue:F1}mm");
+			}
+			catch (Exception ex)
+			{
+				LogToFile(GetDiagnosticPath(), $"ERROR in PlaneToleranceSlider_ValueChanged: {ex.Message}");
+			}
+		}
+
 		
 		private void ResetViewButton_Click(object sender, RoutedEventArgs e)
 		{
@@ -1045,7 +1182,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				LogToFile(GetDiagnosticPath(), $"ERROR in ResetViewButton_Click: {ex.Message}");
 			}
 		}
-
+		
 
 		private void FlipDepthVerticallyCheckBox_Changed(object sender, RoutedEventArgs e)
 		{
@@ -1220,26 +1357,6 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					OverlayCanvas.Children.Remove(element);
 				}
 				
-				// Add visual elements for current active touches
-				foreach (var touch in activeTouches)
-				{
-					// Require at least 2 frames before rendering (de-jitter)
-					if (touch.SeenCount < 2) continue;
-
-					var rect = new Rectangle
-						{
-							Width = 20,
-							Height = 20,
-							Fill = new SolidColorBrush(Colors.Red),
-						Stroke = new SolidColorBrush(Colors.DarkRed),
-						StrokeThickness = 2,
-						Tag = "TouchVisual"
-					};
-
-					Canvas.SetLeft(rect, touch.Position.X - 10);
-					Canvas.SetTop(rect, touch.Position.Y - 10);
-					OverlayCanvas.Children.Add(rect);
-				}
 				
 				// Draw touch area boundary (keep existing logic)
 				DrawTouchAreaBoundary();
@@ -1553,36 +1670,13 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 		private void UpdateTouchVisuals(List<Point> touches)
 		{
-			// REFINEMENT NOTE: If scaling from depth coordinates to UI coordinates is needed,
-			// use explicit floating-point division for precision:
-			// double scaleX = depthCanvas.ActualWidth / 512.0;
-			// double scaleY = depthCanvas.ActualHeight / 424.0;
-			// var uiX = touchPoint.X * scaleX;
-			// var uiY = touchPoint.Y * scaleY;
-
-			// Clear existing touch visuals
-			var toRemove = OverlayCanvas.Children.OfType<Rectangle>().Where(r => r.Tag?.ToString() == "TouchVisual").ToList();
-			foreach (var rect in toRemove)
-			{
-				OverlayCanvas.Children.Remove(rect);
-			}
-
-			// Add new touch visuals
-			foreach (var touch in touches)
-			{
-				var rect = new Rectangle
-				{
-					Width = 20, 
-					Height = 20, 
-					Fill = new SolidColorBrush(Colors.Red), 
-					Stroke = new SolidColorBrush(Colors.DarkRed), 
-					StrokeThickness = 2,
-					Tag = "TouchVisual" 
-				};
-				Canvas.SetLeft(rect, touch.X - 10);
-				Canvas.SetTop(rect, touch.Y - 10);
-				OverlayCanvas.Children.Add(rect);
-			}
+			// Remove old squares if any were left
+			var toRemove = OverlayCanvas.Children
+				.OfType<Rectangle>()
+				.Where(r => r.Tag?.ToString() == "TouchVisual")
+				.ToList();
+			foreach (var rect in toRemove) OverlayCanvas.Children.Remove(rect);
+			// Borders are drawn inside DetectTouchesInDepthData after blobs are accepted.
 		}
 
 		private void UpdateHeatmap(Rect area, CameraSpacePoint[] csp, int width, int height, double thresholdM)
@@ -2453,6 +2547,126 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				pts.Add(new Point(ds.X, ds.Y));
 			}
+		}
+
+		private List<List<Point>> FindContours(bool[] mask, int width, int height)
+		{
+			var contours = new List<List<Point>>();
+			var visited = new bool[width * height];
+			
+			for (int y = 0; y < height; y++)
+			{
+				for (int x = 0; x < width; x++)
+				{
+					int i = y * width + x;
+					if (mask[i] && !visited[i])
+					{
+						var contour = new List<Point>();
+						TraceContour(mask, visited, width, height, x, y, contour);
+						if (contour.Count > 4) // Only keep meaningful contours
+						{
+							contours.Add(contour);
+						}
+					}
+				}
+			}
+			return contours;
+		}
+
+		private void TraceContour(bool[] mask, bool[] visited, int width, int height, int startX, int startY, List<Point> contour)
+		{
+			var stack = new Stack<Point>();
+			stack.Push(new Point(startX, startY));
+			
+			while (stack.Count > 0)
+			{
+				var p = stack.Pop();
+				int x = (int)p.X;
+				int y = (int)p.Y;
+				int i = y * width + x;
+				
+				if (x < 0 || x >= width || y < 0 || y >= height || visited[i] || !mask[i])
+					continue;
+				
+				visited[i] = true;
+				contour.Add(p);
+				
+				// Add 8-connected neighbors
+				for (int dy = -1; dy <= 1; dy++)
+				{
+					for (int dx = -1; dx <= 1; dx++)
+					{
+						if (dx == 0 && dy == 0) continue;
+						stack.Push(new Point(x + dx, y + dy));
+					}
+				}
+			}
+		}
+
+		private void DrawContourBorder(List<Point> contour, System.Windows.Media.Brush brush)
+		{
+			if (contour.Count < 3) return;
+			
+			// Create polygon for contour
+			var polygon = new System.Windows.Shapes.Polygon
+			{
+				Stroke = brush,
+				StrokeThickness = 2,
+				Fill = System.Windows.Media.Brushes.Transparent,
+				Tag = "ContourBorder"
+			};
+			
+			var points = new PointCollection();
+			foreach (var pt in contour)
+			{
+				points.Add(pt);
+			}
+			polygon.Points = points;
+			
+			OverlayCanvas.Children.Add(polygon);
+		}
+
+
+		private double Cross(Point a, Point b, Point c){return (b.X-a.X)*(c.Y-a.Y)-(b.Y-a.Y)*(c.X-a.X);}
+		private List<Point> ConvexHull(List<Point> pts){
+			if(pts==null||pts.Count<3) return pts?.ToList()??new List<Point>();
+			var p=pts.OrderBy(v=>v.X).ThenBy(v=>v.Y).ToList(); var lo=new List<Point>(); foreach(var v in p){while(lo.Count>=2&&Cross(lo[lo.Count-2],lo[lo.Count-1],v)<=0) lo.RemoveAt(lo.Count-1); lo.Add(v);} var up=new List<Point>(); for(int i=p.Count-1;i>=0;i--){var v=p[i]; while(up.Count>=2&&Cross(up[up.Count-2],up[up.Count-1],v)<=0) up.RemoveAt(up.Count-1); up.Add(v);} lo.RemoveAt(lo.Count-1); up.RemoveAt(up.Count-1); lo.AddRange(up); return lo;
+		}
+
+
+		private void Open3x3(bool[] mask,int w,int h,int ax,int ay,int bx,int by){bool[] tmp; Erode3x3(mask,w,h,ax,ay,bx,by,5, out tmp); Dilate3x3(tmp,out mask,w,h,ax,ay,bx,by);}
+		private void Close3x3(bool[] mask,int w,int h,int ax,int ay,int bx,int by){bool[] tmp; Dilate3x3(mask,out tmp,w,h,ax,ay,bx,by); Erode3x3(tmp,w,h,ax,ay,bx,by,5,out mask);}
+		private void Erode3x3(bool[] src,int w,int h,int ax,int ay,int bx,int by,int need,out bool[] dst){
+			dst=new bool[src.Length];
+			for(int y=ay+1;y<by-1;y++){int row=y*w;
+				for(int x=ax+1;x<bx-1;x++){int i=row+x; if(!src[i]){dst[i]=false;continue;}
+					int c=0; for(int yy=-1;yy<=1;yy++){int nrow=(y+yy)*w; for(int xx=-1;xx<=1;xx++) if(xx!=0||yy!=0) if(src[nrow+(x+xx)]) c++; }
+					dst[i]= c>=need;
+				}}
+		}
+		private void Dilate3x3(bool[] src,out bool[] dst,int w,int h,int ax,int ay,int bx,int by){
+			dst=new bool[src.Length];
+			for(int y=ay+1;y<by-1;y++){int row=y*w;
+				for(int x=ax+1;x<bx-1;x++){int i=row+x; bool any=false;
+					for(int yy=-1;yy<=1 && !any; yy++){int nrow=(y+yy)*w; for(int xx=-1;xx<=1;xx++) if(src[nrow+(x+xx)]){any=true;break;}}
+					dst[i]=any;
+				}}
+		}
+
+		private List<List<Point>> MergeCloseBlobs(List<List<Point>> blobs,int mergeDist){
+			if(blobs.Count<=1) return blobs;
+			var centers = blobs.Select(b=> new Point(b.Average(p=>p.X), b.Average(p=>p.Y))).ToList();
+			int n=blobs.Count; var used=new bool[n];
+			var outList=new List<List<Point>>();
+			for(int i=0;i<n;i++){ if(used[i]) continue;
+				var acc=new List<Point>(blobs[i]); used[i]=true;
+				for(int j=i+1;j<n;j++){ if(used[j]) continue;
+					double dx=centers[i].X - centers[j].X, dy=centers[i].Y - centers[j].Y;
+					if(dx*dx+dy*dy <= mergeDist*mergeDist){ acc.AddRange(blobs[j]); used[j]=true; }
+				}
+				outList.Add(acc);
+			}
+			return outList;
 		}
 	}
 }
