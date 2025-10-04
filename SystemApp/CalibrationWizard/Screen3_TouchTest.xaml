@@ -63,8 +63,7 @@
 									</TransformGroup>
 								</Grid.RenderTransform>
 								<Image x:Name="DepthImage" Stretch="Fill"/>
-								<Image x:Name="HeatmapImage" Stretch="Fill"/>
-								<Canvas x:Name="OverlayCanvas" Background="Transparent"/>
+								<Canvas x:Name="OverlayCanvas" Background="Transparent" Panel.ZIndex="1"/>
 							</Grid>
 						</Viewbox>
 					</Border>
@@ -82,27 +81,27 @@
 					<!-- SIMPLE TOUCH DETECTION -->
 					<GroupBox Header="🎯 Touch Detection" Margin="0,0,0,20">
 						<StackPanel Margin="10">
-							<TextBlock Text="Object Height (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
+							<TextBlock Text="Max Touch Distance (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
 							<StackPanel Orientation="Horizontal" Margin="0,2,0,0">
 								<Slider x:Name="PlaneThresholdSlider"
-								        Minimum="3" Maximum="8" Value="6"
+								        Minimum="3" Maximum="30" Value="15"
 								        TickFrequency="1" TickPlacement="None"
 								        ValueChanged="PlaneThresholdSlider_ValueChanged"
 								        Width="150" Margin="0,0,10,0"/>
-								<TextBlock x:Name="ThresholdValueText" Text="6mm" FontSize="11" Foreground="#333" 
+								<TextBlock x:Name="ThresholdValueText" Text="15mm" FontSize="11" Foreground="#333" 
 										   VerticalAlignment="Center" MinWidth="40"/>
 							</StackPanel>
-							<TextBlock Text="Maximum distance from wall for touch detection" 
+							<TextBlock Text="Maximum distance from wall for touch detection (15-25mm for fingers)" 
 									   FontSize="10" Foreground="#666" Margin="0,0,0,10"/>
 							
 							<TextBlock Text="Plane Threshold (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
 							<StackPanel Orientation="Horizontal" Margin="0,2,0,0">
 								<Slider x:Name="PlaneToleranceSlider"
-								        Minimum="1" Maximum="5" Value="1.5"
+								        Minimum="1" Maximum="5" Value="2.5"
 								        TickFrequency="0.5" TickPlacement="None"
 								        ValueChanged="PlaneToleranceSlider_ValueChanged"
 								        Width="150" Margin="0,0,10,0"/>
-								<TextBlock x:Name="PlaneToleranceValueText" Text="1.5mm" FontSize="11" Foreground="#333" 
+								<TextBlock x:Name="PlaneToleranceValueText" Text="2.5mm" FontSize="11" Foreground="#333" 
 										   VerticalAlignment="Center" MinWidth="40"/>
 							</StackPanel>
 							<TextBlock Text="Tolerance for plane detection" 
@@ -131,7 +130,6 @@
 							<GroupBox Header="Camera View" Margin="0,0,0,15">
 								<StackPanel Margin="10">
 									<CheckBox x:Name="FlipDepthVerticallyCheckBox" IsChecked="True" Content="Flip depth vertically" Checked="FlipDepthVerticallyCheckBox_Changed" Unchecked="FlipDepthVerticallyCheckBox_Changed"/>
-									<CheckBox x:Name="ShowHeatmapCheckBox" IsChecked="False" Content="Show distance heatmap" Checked="Heatmap_Changed" Unchecked="Heatmap_Changed" Margin="0,4,0,0"/>
 								</StackPanel>
 							</GroupBox>
 							
@@ -139,27 +137,20 @@
 								<StackPanel Margin="10">
 									<TextBlock Text="Min Object Size" FontWeight="Bold" Margin="0,0,0,5"/>
 									<Slider x:Name="MinBlobAreaSlider"
-									        Minimum="30" Maximum="60" Value="45"
+									        Minimum="10" Maximum="60" Value="30"
 									        TickFrequency="5" TickPlacement="None"
 									        ValueChanged="MinBlobAreaSlider_ValueChanged"
 									        Width="200"/>
-									<TextBlock x:Name="MinBlobAreaValueText" Text="45 pts" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
+									<TextBlock x:Name="MinBlobAreaValueText" Text="30 pts" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
 									
 									<TextBlock Text="Max Object Size" FontWeight="Bold" Margin="0,10,0,5"/>
 									<Slider x:Name="MaxBlobAreaSlider"
-									        Minimum="200" Maximum="500" Value="200"
+									        Minimum="400" Maximum="600" Value="500"
 									        TickFrequency="50" TickPlacement="None"
 									        ValueChanged="MaxBlobAreaSlider_ValueChanged"
 									        Width="200"/>
-									<TextBlock x:Name="MaxBlobAreaValueText" Text="200 pts" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
+									<TextBlock x:Name="MaxBlobAreaValueText" Text="500 pts" HorizontalAlignment="Center" FontSize="12" Margin="0,5,0,10"/>
 									
-									<!-- Touch Mode Selection -->
-									<TextBlock Text="Touch Mode" FontWeight="Bold" Margin="0,10,0,5"/>
-									<StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-										<RadioButton x:Name="HandTouchMode" Content="Hand" IsChecked="True" Margin="0,0,10,0" Checked="TouchMode_Changed"/>
-										<RadioButton x:Name="BallTouchMode" Content="Ball" Margin="0,0,10,0" Checked="TouchMode_Changed"/>
-										<RadioButton x:Name="CustomTouchMode" Content="Custom" Checked="TouchMode_Changed"/>
-									</StackPanel>
 								</StackPanel>
 							</GroupBox>
 							
