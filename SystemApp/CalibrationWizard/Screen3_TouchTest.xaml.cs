@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -34,6 +34,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		// TOUCH DETECTION CACHING for performance
 		private Rect cachedDepthTouchArea = Rect.Empty;
 		private bool coordinateMappingRefreshed = false;
+		private bool singleTouchMode = false;
 		
 		
 		// CONSTANT SCALING FACTORS
@@ -93,8 +94,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		private DateTime guardUntil = DateTime.MinValue;
 
 		
-		// VARIABLE TOUCH SIZE DETECTION for different interaction types
-		private int maxBlobAreaPoints = 1000; // Maximum touch size for large objects
+        // VARIABLE TOUCH SIZE DETECTION for different interaction types
+        private int maxBlobAreaPoints = 1000; // Maximum touch size for large objects
+
+        // Cached path for Screen 3 diagnostic text in Pictures (per session)
+        private string screen3DiagnosticPath;
 
 		public Screen3_TouchTest(KinectManager.KinectManager manager, CalibrationConfig config)
 		{
@@ -217,12 +221,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 		}
 		
-		private void Screen3_TouchTest_Loaded(object sender, RoutedEventArgs e)
-		{
-			try
-			{
-				// Initialize UI elements after the window is fully loaded
-				InitializeUIElements();
+        private void Screen3_TouchTest_Loaded(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Initialize UI elements after the window is fully loaded
+                InitializeUIElements();
 				
 				// Initialize sliders after UI is fully loaded
 				InitializeSliders();
@@ -230,16 +234,16 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// Call this after loading calibration data
 				NormalizeAndOrientPlane();
 				
-				// Run initial diagnostics
-				RunInitialDiagnostics();
-				
-				LogToFile(GetDiagnosticPath(), "UI elements and sliders initialized after Loaded event");
-			}
-			catch (Exception ex)
-			{
-				LogToFile(GetDiagnosticPath(), $"ERROR in Screen3_TouchTest_Loaded: {ex.Message}");
-			}
-		}
+                // Run initial diagnostics
+                RunInitialDiagnostics();
+
+                LogToFile(GetDiagnosticPath(), "UI elements and sliders initialized after Loaded event");
+            }
+            catch (Exception ex)
+            {
+                LogToFile(GetDiagnosticPath(), $"ERROR in Screen3_TouchTest_Loaded: {ex.Message}");
+            }
+        }
 		
 		private void InitializeSliders()
 		{
@@ -247,7 +251,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			{
 				if (PlaneThresholdSlider != null)
 				{
-					// Max Touch Distance (δ_max): 3-30 mm
+					// Max Touch Distance (Î´_max): 3-30 mm
 					PlaneThresholdSlider.Minimum = 3;
 					PlaneThresholdSlider.Maximum = 30;
 					if (PlaneThresholdSlider.Value < PlaneThresholdSlider.Minimum || PlaneThresholdSlider.Value > PlaneThresholdSlider.Maximum)
@@ -282,6 +286,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				{
 					PlaneToleranceSlider.Minimum = 1;
 					PlaneToleranceSlider.Maximum = 5;
+					PlaneToleranceSlider.TickFrequency = 0.5;
 					if (PlaneToleranceSlider.Value < PlaneToleranceSlider.Minimum || PlaneToleranceSlider.Value > PlaneToleranceSlider.Maximum)
 					{
 						PlaneToleranceSlider.Value = 2.5; // Default plane tolerance
@@ -656,15 +661,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				neighborCount = new byte[len];
 			}
 
-			// Slider values (mm → m)
+			// Slider values (mm â†’ m)
 			double objMm = PlaneThresholdSlider != null ? PlaneThresholdSlider.Value : 15.0; // 3..30mm
 			double tolMm = PlaneToleranceSlider != null ? PlaneToleranceSlider.Value : 2.5; // 1..5mm
 
-			float thrM = (float)(objMm * 0.001);  // δ_max
+			float thrM = (float)(objMm * 0.001);  // Î´_max
 
 			var now = DateTime.Now;
 
-			// δ_min now respects the slider value (2.5-3.0mm as intended)
+			// Î´_min now respects the slider value (2.5-3.0mm as intended)
 			float baseMinPos = (float)Math.Max(0.0008, tolMm * 0.001);
 			// brief guard adds ~1.0mm, capped to keep below contactOn
 			float guardMinPos = (now <= guardUntil) ? Math.Min(0.0025f, baseMinPos + 0.0010f) : baseMinPos;
@@ -690,7 +695,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			if (ENABLE_VERBOSE_DIAGNOSTICS && frameCounter % LOG_EVERY_N_FRAMES == 0) 
 			{
 				LogToFile(GetDiagnosticPath(), $"ROI Search Area: {area.X},{area.Y},{area.Width}x{area.Height} (depth coordinates)");
-				LogToFile(GetDiagnosticPath(), $"Color→Depth Mapping: TouchArea({calibration.TouchArea.X},{calibration.TouchArea.Y},{calibration.TouchArea.Width}x{calibration.TouchArea.Height}) → ROI({area.X},{area.Y},{area.Width}x{area.Height})");
+				LogToFile(GetDiagnosticPath(), $"Colorâ†’Depth Mapping: TouchArea({calibration.TouchArea.X},{calibration.TouchArea.Y},{calibration.TouchArea.Width}x{calibration.TouchArea.Height}) â†’ ROI({area.X},{area.Y},{area.Width}x{area.Height})");
 				LogToFile(GetDiagnosticPath(), $"BLOB SIZE LIMITS: Min={MinBlobAreaSlider?.Value ?? 45}, Max={MaxBlobAreaSlider?.Value ?? 200}");
 				LogToFile(GetDiagnosticPath(), $"THRESHOLD SETTINGS: ObjectHeight={PlaneThresholdSlider?.Value ?? 15}mm, Tolerance={PlaneToleranceSlider?.Value ?? 2.5}mm");
 			}
@@ -735,7 +740,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Plane: N=({plane.Nx:F6}, {plane.Ny:F6}, {plane.Nz:F6}), D={plane.D:F6}");
 			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Thresholds: minDelta={guardMinPos*1000:F1}mm, maxDelta={thrM*1000:F1}mm");
 			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Detection Area: X={ax}, Y={ay}, W={bx-ax}, H={by-ay}");
-			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Algorithm: Along-ray residual calculation with 3×3 density filtering");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Algorithm: Along-ray residual calculation with 3Ã—3 density filtering");
 
 			// 1) Build candidate mask using along-ray residual and color TouchArea gating
 			for (int y = ay; y < by; y++)
@@ -794,7 +799,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 							LogToFile(GetDiagnosticPath(), $"  Range: {r:F3}m");
 							LogToFile(GetDiagnosticPath(), $"  Ray Direction: ({dx:F3}, {dy:F3}, {dz:F3})");
 							LogToFile(GetDiagnosticPath(), $"  Plane Intersection: denom={denom:F3}, t_exp={tExp:F3}m");
-							LogToFile(GetDiagnosticPath(), $"  Along-Ray Residual: δ={delta*1000:F1}mm");
+							LogToFile(GetDiagnosticPath(), $"  Along-Ray Residual: Î´={delta*1000:F1}mm");
 							LogToFile(GetDiagnosticPath(), $"  Threshold Check: {delta*1000:F1}mm in range [{guardMinPos*1000:F1}, {thrM*1000:F1}]mm");
 							bool inArea = haveMap ? 
 								(!float.IsInfinity(d2c[i].X) && !float.IsInfinity(d2c[i].Y) && 
@@ -845,7 +850,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"DENSITY FILTER: {densityFilterCandidates} candidates, {densityFilterSurvivors} survivors (minNeighbors={minNeighbors})");
 
-			// Stronger denoise: 3×3 neighbor + morphological open + close
+			// Stronger denoise: 3Ã—3 neighbor + morphological open + close
 			Open3x3(candidateMask, width, height, ax, ay, bx, by);
 			Close3x3(candidateMask, width, height, ax, ay, bx, by);
 
@@ -862,14 +867,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 
 			var blobs = FindBlobs(survivors);
-			blobs = MergeCloseBlobs(blobs, 28); // px radius to merge clusters (was 30)
+			blobs = MergeCloseBlobs(blobs, 40); // px radius to merge clusters (was 28)
 			var touchPoints = new List<Point>();
 
 				foreach (var blob in blobs)
 				{
 				if (blob.Count < MinBlobAreaSlider.Value || blob.Count > MaxBlobAreaSlider.Value) continue;
 
-				// δ‑weighted centroid
+				// Î´â€‘weighted centroid
 				double sumW = 0, sumX = 0, sumY = 0;
 				float minDelta = float.MaxValue;
 				Point minDeltaPt = default(Point);
@@ -879,7 +884,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					int i = ((int)pt.Y) * width + ((int)pt.X);
 					float d = deltaRay[i];
 					if (d < minDelta) { minDelta = d; minDeltaPt = pt; }
-					double w = Math.Max(0.0001, thrM - d); // closer to plane ⇒ higher weight
+					double w = Math.Max(0.0001, thrM - d); // closer to plane â‡’ higher weight
 					sumW += w;
 					sumX += pt.X * w;
 					sumY += pt.Y * w;
@@ -907,7 +912,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				}
 				if (contactPixels / (float)blob.Count < contactFracMin) continue;
 
-				// mean δ of core ≤ 60% of contact threshold (max 12mm)
+				// mean Î´ of core â‰¤ 60% of contact threshold (max 12mm)
 				double meanCore = core.Average(pt => deltaRay[((int)pt.Y)*width+((int)pt.X)]);
 				double maxMean = Math.Min(contactOn * 0.6f, 0.012); // ~60% of contact threshold, max 12mm
 				if (meanCore > maxMean) continue;
@@ -924,11 +929,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				// ADD SAFETY CHECK:
 				if (Math.Abs(sumW) < 1e-9) continue; // Prevent division by zero
 
-				// Refine to the δ-minimum's local area for stability
+				// Refine to the Î´-minimum's local area for stability
 				int cx = (int)Math.Round(sumX / sumW);
 				int cy = (int)Math.Round(sumY / sumW);
 
-				// Optional local min 3×3 snap
+				// Optional local min 3Ã—3 snap
 				Point best = minDeltaPt;
 				float bestDelta = minDelta;
 				for (int yy = -1; yy <= 1; yy++)
@@ -1019,6 +1024,12 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			hadTouchLastFrame = touchPoints.Count > 0;
 
+			// Post-filter: de-duplicate nearby touches (safest approach)
+			if (singleTouchMode && touchPoints.Count > 1)
+			{
+				touchPoints = DeDuplicateByProximity(touchPoints, width, deltaRay, 45);
+			}
+
 			UpdateTouchTracking(touchPoints);
 			UpdateTouchVisuals(touchPoints);
 
@@ -1054,7 +1065,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Detection Stats: Candidates={totalCandidates}, AfterDensityFilter={survivorsAfterDensity}");
 			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Blobs Found: {blobs.Count}, Final Touches: {touchPoints.Count}");
 			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Active Touches: {activeTouches.Count}");
-			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Algorithm Performance: Ray-based detection with 3×3 density filtering");
+			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"Algorithm Performance: Ray-based detection with 3Ã—3 density filtering");
 			if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"=================================");
 		}
 		
@@ -1093,14 +1104,14 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 
 			var status = new StringBuilder();
-			status.AppendLine($"Calibration: ✓ Loaded");
-			status.AppendLine($"Plane: ✓ Valid (N=({planeNx:F3}, {planeNy:F3}, {planeNz:F3}), D={planeD:F3})");
-			status.AppendLine($"Touch Area: ✓ Active ({cachedDepthTouchArea.Width:F0}x{cachedDepthTouchArea.Height:F0} pixels)");
-			status.AppendLine($"Detection: ✓ Ray-based with density filtering");
+			status.AppendLine($"Calibration: âœ“ Loaded");
+			status.AppendLine($"Plane: âœ“ Valid (N=({planeNx:F3}, {planeNy:F3}, {planeNz:F3}), D={planeD:F3})");
+			status.AppendLine($"Touch Area: âœ“ Active ({cachedDepthTouchArea.Width:F0}x{cachedDepthTouchArea.Height:F0} pixels)");
+			status.AppendLine($"Detection: âœ“ Ray-based with density filtering");
 			status.AppendLine($"Sensitivity: {PlaneThresholdSlider?.Value ?? 30:F1}mm (slider-controlled)");
 			status.AppendLine($"Min Blob Area: {MinBlobAreaSlider?.Value ?? 20:F0} pixels");
 			status.AppendLine($"Active Touches: {activeTouches.Count}");
-			status.AppendLine($"Performance: ✓ Optimized (standard detection)");
+			status.AppendLine($"Performance: âœ“ Optimized (standard detection)");
 
 			StatusText.Text = status.ToString();
 		}
@@ -1190,11 +1201,11 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		}
 
 		
-		private void ResetViewButton_Click(object sender, RoutedEventArgs e)
-		{
-			try
-			{
-				UpdateUnifiedViewTransform();
+        private void ResetViewButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                UpdateUnifiedViewTransform();
 				
 				LogToFile(GetDiagnosticPath(), "View reset to default");
 			}
@@ -1351,7 +1362,9 @@ namespace KinectCalibrationWPF.CalibrationWizard
 					Canvas.SetLeft(rect, depthArea.X);
 					Canvas.SetTop(rect, depthArea.Y);
 					
-					OverlayCanvas.Children.Add(rect);
+                OverlayCanvas.Children.Add(rect);
+                // Ensure markers render above boundaries
+                Panel.SetZIndex(rect, 10);
 					
 					LogToFile(GetDiagnosticPath(), $"Touch area boundary drawn: X={depthArea.X:F1}, Y={depthArea.Y:F1}, W={depthArea.Width:F1}, H={depthArea.Height:F1}");
 				}
@@ -1724,7 +1737,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				// Cache the mapping lookup to avoid repeated O(512×424) scans
+				// Cache the mapping lookup to avoid repeated O(512Ã—424) scans
 				if (!coordinateMappingRefreshed)
 				{
 					// Use fast linear scaling if coordinate mapping not refreshed yet
@@ -1811,20 +1824,20 @@ namespace KinectCalibrationWPF.CalibrationWizard
 				var status = new StringBuilder();
 				
 				// Screen 1 status
-				status.AppendLine($"Screen 1 (Plane): {(isPlaneValid ? "✓ Valid" : "✗ Invalid")}");
+				status.AppendLine($"Screen 1 (Plane): {(isPlaneValid ? "âœ“ Valid" : "âœ— Invalid")}");
 				
 				// Screen 2 status
 				bool touchAreaValid = calibration?.TouchArea != null && 
 									 calibration.TouchArea.Width > 0 && 
 									 calibration.TouchArea.Height > 0;
-				status.AppendLine($"Screen 2 (Touch Area): {(touchAreaValid ? "✓ Valid" : "✗ Invalid")}");
+				status.AppendLine($"Screen 2 (Touch Area): {(touchAreaValid ? "âœ“ Valid" : "âœ— Invalid")}");
 				
 				// Kinect status
-				status.AppendLine($"Kinect: {(kinectManager?.IsInitialized == true ? "✓ Connected" : "✗ Disconnected")}");
+				status.AppendLine($"Kinect: {(kinectManager?.IsInitialized == true ? "âœ“ Connected" : "âœ— Disconnected")}");
 				
 				
 				// Performance status
-				status.AppendLine($"Performance: ✓ Optimized (robust detection)");
+				status.AppendLine($"Performance: âœ“ Optimized (robust detection)");
 				
 				DepthInfoText.Text = status.ToString();
 			}
@@ -2080,18 +2093,41 @@ namespace KinectCalibrationWPF.CalibrationWizard
 
 			LogToFile(diagnosticPath, "=== END COMPREHENSIVE DIAGNOSTIC ===");
 		}
-		private string GetDiagnosticPath() 
-		{ 
-			var diagDir = @"C:\Users\musta\Downloads\Kinect Projects\SariyaGame3\diag";
-			
-			// Ensure the diagnostic directory exists
-			if (!System.IO.Directory.Exists(diagDir))
-			{
-				System.IO.Directory.CreateDirectory(diagDir);
-			}
-			
-			return System.IO.Path.Combine(diagDir, "screen3_diagnostic.txt");
-		}
+        private string GetDiagnosticPath() 
+        { 
+            try
+            {
+                if (string.IsNullOrEmpty(screen3DiagnosticPath))
+                {
+                    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    var pics = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+                    var dir = System.IO.Path.Combine(pics, "KinectCalibrationDiagnostics", $"Screen3_TouchTest_{timestamp}");
+                    System.IO.Directory.CreateDirectory(dir);
+                    screen3DiagnosticPath = System.IO.Path.Combine(dir, "screen3_diagnostic.txt");
+                }
+                return screen3DiagnosticPath;
+            }
+            catch
+            {
+                // Fallback to temp if anything goes wrong
+                try
+                {
+                    var temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "KinectCalibrationDiagnostics", "Screen3_Fallback");
+                    System.IO.Directory.CreateDirectory(temp);
+                    screen3DiagnosticPath = System.IO.Path.Combine(temp, "screen3_diagnostic.txt");
+                    return screen3DiagnosticPath;
+                }
+                catch
+                {
+                    // Last resort: alongside executable
+                    var appDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                    screen3DiagnosticPath = System.IO.Path.Combine(appDir ?? ".", "screen3_diagnostic.txt");
+                    return screen3DiagnosticPath;
+                }
+            }
+        }
+
+
 		
 		// ENHANCED: Automatic diagnostic access on errors
 		private void LogToFile(string path, string message) 
@@ -2588,6 +2624,23 @@ namespace KinectCalibrationWPF.CalibrationWizard
 			}
 			return outList;
 		}
+
+		private List<Point> DeDuplicateByProximity(List<Point> pts, int width, float[] delta, int radiusPx)
+		{
+			var r2 = radiusPx * radiusPx;
+			var scored = pts.Select(p => new { P = p, D = delta[(int)p.Y * width + (int)p.X] })
+						   .OrderBy(x => x.D).ToList();
+			var kept = new List<Point>();
+			foreach (var s in scored)
+			{
+				bool near = kept.Any(k => {
+					var dx = s.P.X - k.X;
+					var dy = s.P.Y - k.Y;
+					return dx * dx + dy * dy <= r2;
+				});
+				if (!near) kept.Add(s.P);
+			}
+			return kept;
+		}
 	}
 }
-
