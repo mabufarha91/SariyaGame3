@@ -79,7 +79,7 @@
 					<StackPanel Margin="20">
 					
 					<!-- SIMPLE TOUCH DETECTION -->
-					<GroupBox Header="ðŸŽ¯ Touch Detection" Margin="0,0,0,20">
+					<GroupBox Header="🎯 Touch Detection" Margin="0,0,0,20">
 						<StackPanel Margin="10">
 							<TextBlock Text="Max Touch Distance (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
 							<StackPanel Orientation="Horizontal" Margin="0,2,0,0">
@@ -94,7 +94,7 @@
                             <TextBlock Text="Maximum distance from wall for touch detection (8-15mm typical)" 
                                            FontSize="10" Foreground="#666" Margin="0,0,0,10"/>
 							
-							<TextBlock Text="Plane Threshold (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
+							<TextBlock Text="Plane Tolerance (mm):" FontSize="11" Foreground="#333" Margin="0,5,0,0"/>
 							<StackPanel Orientation="Horizontal" Margin="0,2,0,0">
                             <Slider x:Name="PlaneToleranceSlider"
                                         Minimum="1" Maximum="5" Value="2.5"
@@ -107,8 +107,8 @@
 							<TextBlock Text="Tolerance for plane detection" 
 									   FontSize="10" Foreground="#666" Margin="0,0,0,10"/>
 							
-							<TextBlock Text="ðŸŽ¯ One-sided touch detection active!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
-							<TextBlock Text="Ray-based detection with 3Ã—3 density filtering" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
+							<TextBlock Text="🎯 One-sided touch detection active!" FontSize="12" Foreground="#4CAF50" TextWrapping="Wrap" Margin="0,5,0,10" HorizontalAlignment="Center" FontWeight="Bold"/>
+							<TextBlock Text="Ray-based detection with 3×3 density filtering" FontSize="11" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,10" HorizontalAlignment="Center"/>
 						</StackPanel>
 					</GroupBox>
 					
@@ -125,7 +125,7 @@
                     <Button x:Name="ResetViewButton" Content="RESET VIEW" Style="{StaticResource WizardButtonStyle}" Margin="0,10,0,0" Background="#607D8B" Click="ResetViewButton_Click"/>
 					
 					<!-- ADVANCED (HIDDEN BY DEFAULT) -->
-					<Expander Header="âš™ï¸ Advanced Settings" Margin="0,20,0,20" IsExpanded="False">
+					<Expander Header="⚙️ Advanced Settings" Margin="0,20,0,20" IsExpanded="False">
 						<StackPanel>
 							<GroupBox Header="Camera View" Margin="0,0,0,15">
 								<StackPanel Margin="10">
@@ -158,8 +158,8 @@
 					</Expander>
 					
 					<!-- FINAL ACTIONS -->
-					<Button x:Name="FinishButton" Content="ðŸ’¾ Save &amp; Exit" Style="{StaticResource WizardButtonStyle}" Margin="0,10,0,0" Click="FinishButton_Click"/>
-					<Button x:Name="CancelButton" Content="âŒ Cancel" Style="{StaticResource WizardButtonStyle}" Margin="0,10,0,0" Background="#F44336" Click="CancelButton_Click"/>
+					<Button x:Name="FinishButton" Content="💾 Save &amp; Exit" Style="{StaticResource WizardButtonStyle}" Margin="0,10,0,0" Click="FinishButton_Click"/>
+					<Button x:Name="CancelButton" Content="❌ Cancel" Style="{StaticResource WizardButtonStyle}" Margin="0,10,0,0" Background="#F44336" Click="CancelButton_Click"/>
 					</StackPanel>
 				</ScrollViewer>
 			</Border>

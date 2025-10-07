@@ -296,7 +296,7 @@ namespace KinectCalibrationWPF.CalibrationWizard
                     MinBlobAreaSlider.Maximum = 60;
                     if (MinBlobAreaSlider.Value < MinBlobAreaSlider.Minimum || MinBlobAreaSlider.Value > MinBlobAreaSlider.Maximum)
                     {
-                        MinBlobAreaSlider.Value = 30; // default 30 pts
+                        MinBlobAreaSlider.Value = 12; // default 12 pts
                     }
                     minBlobAreaPoints = (int)Math.Round(MinBlobAreaSlider.Value);
                     if (MinBlobAreaValueText != null)
@@ -738,7 +738,8 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 
 		var now = DateTime.Now;
 
-		float baseMinPos = (float)Math.Max(0.008f, tolMm * 0.001f);
+		// Testing: lower detection floor to admit shallow (3–7mm) near-wall pixels
+		float baseMinPos = (float)Math.Max(0.003f, tolMm * 0.001f);
 		// brief guard adds ~1.0mm, capped to keep below contactOn
 		float guardMinPos = baseMinPos;
 
@@ -1023,7 +1024,7 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 					break;
 				}
 			}
-			float adaptMin = Math.Max(guardMinPos, p05 + 0.0007f);
+			float adaptMin = Math.Max(guardMinPos, p05 + 0.0003f);
 
 			// Reapply threshold with adaptive minimum
 			for (int y = ay; y < by; y++)
@@ -1054,8 +1055,8 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 			Open3x3(candidateMask, width, height, ax, ay, bx, by);
 			Close3x3(candidateMask, width, height, ax, ay, bx, by);
 
-			// Local-contrast gate: keep only pixels that protrude above local neighborhood (~1.0mm for testing)
-			ApplyLocalContrastGate(candidateMask, deltaFiltered, width, height, ax, ay, bx, by, bumpMm: 1.0f);
+			// Local-contrast gate: keep only pixels that protrude above local neighborhood (~1.2mm for testing)
+			ApplyLocalContrastGate(candidateMask, deltaFiltered, width, height, ax, ay, bx, by, bumpMm: 1.2f);
 
 			// Temporal K-of-N to suppress single-frame sparkles (relaxed to 1 when fast-tap burst enabled)
 			if (temporalCount != null && temporalCount.Length == width * height)
@@ -1167,11 +1168,11 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 					if (deltaFiltered[bi] <= contactOn) core.Add(pt);
 				}
 
-				// Dynamic contact fraction based on blob size
+				// Dynamic contact fraction based on blob size (stricter to reduce wispy borders)
 				float contactFracMin;
-				if (blob.Count <= 60) contactFracMin = 0.05f;      // 5% for tiny blobs
-				else if (blob.Count <= 150) contactFracMin = 0.08f; // 8% for small blobs
-				else contactFracMin = 0.12f;                        // 12% for large blobs
+				if (blob.Count <= 60) contactFracMin = 0.10f;      // 10% for tiny blobs
+				else if (blob.Count <= 150) contactFracMin = 0.12f; // 12% for small blobs
+				else contactFracMin = 0.15f;                        // 15% for large blobs
 				
                 int contactPixels = 0;
                 foreach (var pt in blob) {
@@ -1181,11 +1182,15 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 				if (contactPixels / (float)blob.Count < contactFracMin) continue;
 
 				// mean Î´ of core â‰¤ 60% of contact threshold (max 12mm)
-                double meanCore = core.Count > 0 ? core.Average(pt => (double)deltaFiltered[((int)pt.Y) * width + ((int)pt.X)]) : double.MaxValue;
-                // Slightly relaxed cap for tiny blobs; still capped at 95% of contactOn
-                double sizeFactor = Math.Min(1.0, blob.Count / 1200.0); // 0..1 across typical ranges
-                double maxMean = Math.Min(contactOn * (0.7 + 0.30 * sizeFactor), contactOn * 0.95f);
-                if (meanCore > maxMean) continue;
+				double meanCore = core.Count > 0 ? core.Average(pt => (double)deltaFiltered[((int)pt.Y) * width + ((int)pt.X)]) : double.MaxValue;
+
+				// REPLACE the old cap calculation with:
+				float contactOnCap = Math.Min(thrM, 0.012f); // hard-cap band ≤ 12 mm for testing
+				float sizeFactor = (float)Math.Max(0f, Math.Min(1f, blob.Count / 150f));
+				float maxMeanByShape = contactOnCap * (0.90f - 0.10f * sizeFactor);
+				float maxMeanAbsolute = contactOnCap * 0.98f;
+				float maxMean = Math.Min(maxMeanByShape, maxMeanAbsolute);
+				if (meanCore > maxMean) continue;
                 // Fast-tap (single-frame) burst override: record burst-eligible points for this frame
                 if (ENABLE_FAST_TAP_BURST)
                 {
@@ -1197,20 +1202,22 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
                         tapBurstPoints.Add(key);
                     }
                 }
-				// reject ultra-thin blobs
+				// Reject hollow/outline blobs by solidity (core density within hull)
+				var hullForSolidity = ConvexHull(core);
+				double hullArea = PolygonArea(hullForSolidity);
+				double solidity = core.Count / Math.Max(1.0, hullArea);
+				if (solidity < 0.55) continue;
+
+				// reject ultra-thin blobs (min bounding-box side length)
 				int minX=(int)blob.Min(p=>p.X), maxX=(int)blob.Max(p=>p.X);
 				int minY=(int)blob.Min(p=>p.Y), maxY=(int)blob.Max(p=>p.Y);
-				if ((maxX-minX)<5 || (maxY-minY)<5) continue; // Changed from 8
+				if ((maxX-minX)<8 || (maxY-minY)<8) continue;
 
 				// Aspect ratio rejection for elongated artifacts
 				double blobWidth = maxX - minX, blobHeight = maxY - minY;
 				double ar = Math.Max(blobWidth, blobHeight) / Math.Max(1.0, Math.Min(blobWidth, blobHeight));
 				if (ar > 5.0) continue; // Reject elongated noise
 
-				if (core.Count >= 3){
-					var hull = ConvexHull(core);
-					DrawContourBorder(hull, System.Windows.Media.Brushes.Red); // Tag = "ContourBorder"
-				}
 
 				// ADD SAFETY CHECK:
 				if (Math.Abs(sumW) < 1e-9) continue; // Prevent division by zero
@@ -1245,6 +1252,13 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Safety Check: sumW={sumW:F6} (passed: {Math.Abs(sumW) >= 1e-9})");
 				blobIndex++;
 
+				// Draw border after acceptance with logging
+				var hull = ConvexHull(core);
+				DrawContourBorder(hull, System.Windows.Media.Brushes.Red);
+				
+				// Add touch acceptance logging
+				LogToFile(GetDiagnosticPath(), $"TOUCH ACCEPTED: meanCore={meanCore*1000:F1}mm, area={blob.Count}, corePx={contactPixels}, maxMean={maxMean*1000:F1}mm");
+				
 				touchPoints.Add(best);
 			}
 
@@ -1907,10 +1921,11 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 			}
 
 			// TTL and persistence
-			// Keep touches alive briefly; show only after 2 frames to reduce flicker
+			// Show squares immediately when fast-tap is ON, otherwise require 2 frames
+			int requiredSeen = ENABLE_FAST_TAP_BURST ? 1 : 2;
 			var alive = updated.Where(t => 
 				(now - t.LastSeen).TotalMilliseconds <= 200 && 
-				t.SeenCount >= 2  // Anti-flicker: must persist 2+ frames
+				t.SeenCount >= requiredSeen
 			).ToList();
 			activeTouches = alive;
 		}
@@ -2813,7 +2828,7 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 
 
 		private double Cross(Point a, Point b, Point c){return (b.X-a.X)*(c.Y-a.Y)-(b.Y-a.Y)*(c.X-a.X);}
-		private List<Point> ConvexHull(List<Point> pts){
+private List<Point> ConvexHull(List<Point> pts){
 			if(pts==null||pts.Count<3) return pts?.ToList()??new List<Point>();
 			var p=pts.OrderBy(v=>v.X).ThenBy(v=>v.Y).ToList(); var lo=new List<Point>(); foreach(var v in p){while(lo.Count>=2&&Cross(lo[lo.Count-2],lo[lo.Count-1],v)<=0) lo.RemoveAt(lo.Count-1); lo.Add(v);} var up=new List<Point>(); for(int i=p.Count-1;i>=0;i--){var v=p[i]; while(up.Count>=2&&Cross(up[up.Count-2],up[up.Count-1],v)<=0) up.RemoveAt(up.Count-1); up.Add(v);} lo.RemoveAt(lo.Count-1); up.RemoveAt(up.Count-1); lo.AddRange(up); return lo;
 		}
@@ -3031,6 +3046,20 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 			if (samples.Count % 2 == 0)
 				return 0.5 * (samples[mid - 1] + samples[mid]);
 			return samples[mid];
+		}
+
+		// Compute polygon area (pixels) for solidity checks
+		private static double PolygonArea(List<Point> poly)
+		{
+			if (poly == null || poly.Count < 3) return 0.0;
+			double a = 0.0;
+			for (int i = 0; i < poly.Count; i++)
+			{
+				var p = poly[i];
+				var q = poly[(i + 1) % poly.Count];
+				a += p.X * q.Y - q.X * p.Y;
+			}
+			return Math.Abs(a * 0.5);
 		}
 	}
 }
