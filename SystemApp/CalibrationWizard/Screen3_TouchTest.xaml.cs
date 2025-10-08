@@ -533,17 +533,15 @@ namespace KinectCalibrationWPF.CalibrationWizard
 		{
 			try
 			{
-				depthViewTransformGroup = new TransformGroup();
-				depthScaleTransform = new ScaleTransform(1.0, 1.0);
-				depthFlipTransform = new ScaleTransform(1.0, -1.0); // Flip vertically by default
-				depthTranslateTransform = new TranslateTransform(0, 0);
-				depthViewTransformGroup.Children.Add(depthScaleTransform);
-				depthViewTransformGroup.Children.Add(depthFlipTransform);
-				depthViewTransformGroup.Children.Add(depthTranslateTransform);
-				if (DepthViewContainer != null)
-				{
-					DepthViewContainer.RenderTransform = depthViewTransformGroup;
-				}
+				// Reuse the XAML-named transform instances so the image and overlay
+				// share the exact same transform pipeline (no double transforms).
+				depthViewTransformGroup = DepthViewTransformGroup;
+				depthScaleTransform = DepthScaleTransform;
+				depthFlipTransform = DepthFlipTransform;
+				depthTranslateTransform = DepthTranslateTransform;
+
+				// Do NOT assign a second RenderTransform to the Viewbox/container.
+				// The inner Grid already owns the transform group referenced above.
 			}
 			catch (Exception ex)
 			{
@@ -832,9 +830,9 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 					var p = cameraSpacePoints[i];
 					if (float.IsInfinity(p.X) || float.IsInfinity(p.Y) || float.IsInfinity(p.Z)) continue;
 
-					// Perpendicular-to-plane distance cap (max 10cm)
+					// Perpendicular-to-plane distance cap (max 5cm)
 					float signedDistance = (float)(planeNx * p.X + planeNy * p.Y + planeNz * p.Z + planeD);
-					if (signedDistance > 0.10f) continue; // Reject touches > 10cm from wall
+					if (signedDistance > 0.05f) continue; // Reject touches > 5cm from wall
 
 					double r = Math.Sqrt(p.X * p.X + p.Y * p.Y + p.Z * p.Z);
 					if (r < 0.2 || r > 5.0) continue;
@@ -1179,7 +1177,10 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
                     int bi = ((int)pt.Y) * width + (int)pt.X;
                     if (deltaFiltered[bi] <= contactOn) contactPixels++;
                 }
-				if (contactPixels / (float)blob.Count < contactFracMin) continue;
+                if (contactPixels / (float)blob.Count < contactFracMin) continue;
+
+                // Require a minimum core size to prevent single-pixel promotions
+                if (core.Count < 3) continue;
 
 				// mean Î´ of core â‰¤ 60% of contact threshold (max 12mm)
 				double meanCore = core.Count > 0 ? core.Average(pt => (double)deltaFiltered[((int)pt.Y) * width + ((int)pt.X)]) : double.MaxValue;
@@ -1202,11 +1203,12 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
                         tapBurstPoints.Add(key);
                     }
                 }
-				// Reject hollow/outline blobs by solidity (core density within hull)
-				var hullForSolidity = ConvexHull(core);
-				double hullArea = PolygonArea(hullForSolidity);
-				double solidity = core.Count / Math.Max(1.0, hullArea);
-				if (solidity < 0.55) continue;
+                // Reject hollow/outline blobs by solidity (core density within hull)
+                var hullForSolidity = ConvexHull(core);
+                if (hullForSolidity == null || hullForSolidity.Count < 3) continue;
+                double hullArea = PolygonArea(hullForSolidity);
+                double solidity = core.Count / Math.Max(1.0, hullArea);
+                if (solidity < 0.55) continue;
 
 				// reject ultra-thin blobs (min bounding-box side length)
 				int minX=(int)blob.Min(p=>p.X), maxX=(int)blob.Max(p=>p.X);
@@ -1252,14 +1254,16 @@ private void DetectTouchesInDepthData(ushort[] depthData, int width, int height)
 				if (ENABLE_VERBOSE_DIAGNOSTICS) LogToFile(GetDiagnosticPath(), $"  Safety Check: sumW={sumW:F6} (passed: {Math.Abs(sumW) >= 1e-9})");
 				blobIndex++;
 
-				// Draw border after acceptance with logging
-				var hull = ConvexHull(core);
-				DrawContourBorder(hull, System.Windows.Media.Brushes.Red);
+                // Draw border after acceptance with logging (only if hull is valid)
+                var hull = ConvexHull(core);
+                if (hull != null && hull.Count >= 3)
+                    DrawContourBorder(hull, System.Windows.Media.Brushes.Red);
 				
 				// Add touch acceptance logging
 				LogToFile(GetDiagnosticPath(), $"TOUCH ACCEPTED: meanCore={meanCore*1000:F1}mm, area={blob.Count}, corePx={contactPixels}, maxMean={maxMean*1000:F1}mm");
 				
-				touchPoints.Add(best);
+                // Place touch at the centroid for better visual alignment
+                touchPoints.Add(new Point(cx, cy));
 			}
 
 			// Suppress frames with broad residuals but no accepted contact; hard reset state

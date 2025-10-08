@@ -62,7 +62,7 @@
 										<TranslateTransform x:Name="DepthTranslateTransform"/>
 									</TransformGroup>
 								</Grid.RenderTransform>
-                                <Image x:Name="DepthImage" Stretch="Fill"/>
+                                <Image x:Name="DepthImage" Stretch="Uniform"/>
                                 <Canvas x:Name="OverlayCanvas" Background="Transparent" Panel.ZIndex="1"/>
                             </Grid>
                         </Viewbox>
